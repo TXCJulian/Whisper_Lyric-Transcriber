@@ -1,0 +1,11 @@
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch
+torchaudio
+soundfile
+faster-whisper
+lyricsgenius
+mutagen
+fastapi[standard]
+uvicorn[standard]
+python-dotenv
+python-multipart

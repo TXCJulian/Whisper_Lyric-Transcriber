@@ -1,0 +1,26 @@
+services:
+  lyric-transcriber:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lyric-transcriber:latest
+    container_name: lyric-transcriber
+    restart: unless-stopped
+    environment:
+      - GENIUS_ACCESS_TOKEN=${GENIUS_ACCESS_TOKEN}
+      - PRELOAD_MODELS=true
+      - JOB_TTL_SECONDS=3600
+    ports:
+      - "3334:3334"
+    volumes:
+      - model-cache:/app/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  model-cache:
