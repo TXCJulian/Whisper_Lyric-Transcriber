@@ -39,11 +39,12 @@ class FasterWhisperEngine(TranscriptionEngine):
 
     def __init__(self):
         from app.gpu_backend import get_backend
-        self._models: dict[str, Any] = {}
+        self._model: Any = None
+        self._model_size: str | None = None
         self._backend = get_backend()
 
     def _get_model(self, model_size: str):
-        if model_size not in self._models:
+        if self._model is None or self._model_size != model_size:
             from faster_whisper import WhisperModel
 
             device = "cuda" if self._backend == "cuda" else "cpu"
@@ -51,10 +52,11 @@ class FasterWhisperEngine(TranscriptionEngine):
             logger.info(
                 f"[faster-whisper] Loading '{model_size}' on {device} ({compute_type})"
             )
-            self._models[model_size] = WhisperModel(
+            self._model = WhisperModel(
                 model_size, device=device, compute_type=compute_type
             )
-        return self._models[model_size]
+            self._model_size = model_size
+        return self._model
 
     def transcribe(
         self,
@@ -113,12 +115,24 @@ class FasterWhisperEngine(TranscriptionEngine):
         self._get_model(model_size)
 
     def unload_model(self) -> None:
-        self._models.clear()
-        logger.info("[faster-whisper] Models unloaded")
+        if self._model is not None:
+            del self._model
+            self._model = None
+            self._model_size = None
+            if self._backend == "cuda":
+                from app.gpu_backend import empty_cache
+                empty_cache()
+            logger.info("[faster-whisper] Model unloaded")
 
 
 class OpenAIWhisperEngine(TranscriptionEngine):
     """Transcription engine using OpenAI Whisper (PyTorch). For XPU and ROCm."""
+
+    # faster-whisper model names that don't exist in OpenAI Whisper
+    _MODEL_MAP: dict[str, str] = {
+        "large-v3-turbo": "large-v3",
+        "turbo": "large-v3",
+    }
 
     def __init__(self):
         from app.gpu_backend import get_device
@@ -126,15 +140,25 @@ class OpenAIWhisperEngine(TranscriptionEngine):
         self._model = None
         self._model_size: str | None = None
 
+    def _resolve_model_name(self, model_size: str) -> str:
+        """Map faster-whisper model names to OpenAI Whisper equivalents."""
+        resolved = self._MODEL_MAP.get(model_size, model_size)
+        if resolved != model_size:
+            logger.info(
+                f"[openai-whisper] Mapped model '{model_size}' -> '{resolved}'"
+            )
+        return resolved
+
     def _get_model(self, model_size: str):
-        if self._model is None or self._model_size != model_size:
+        resolved = self._resolve_model_name(model_size)
+        if self._model is None or self._model_size != resolved:
             import whisper
 
             logger.info(
-                f"[openai-whisper] Loading '{model_size}' on {self._device}"
+                f"[openai-whisper] Loading '{resolved}' on {self._device}"
             )
-            self._model = whisper.load_model(model_size, device=self._device)
-            self._model_size = model_size
+            self._model = whisper.load_model(resolved, device=self._device)
+            self._model_size = resolved
         return self._model
 
     def transcribe(

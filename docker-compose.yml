@@ -17,13 +17,6 @@ services:
       - "3334:3334"
     volumes:
       - model-cache:/app/models
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
 
 volumes:
   model-cache:

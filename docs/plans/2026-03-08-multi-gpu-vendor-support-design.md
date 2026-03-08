@@ -81,7 +81,7 @@ Single `Dockerfile` with `ARG GPU_BACKEND=nvidia`.
 | Variant  | Base Image                                     |
 |----------|------------------------------------------------|
 | `nvidia` | `nvidia/cuda:12.8.0-runtime-ubuntu22.04`       |
-| `intel`  | `intel/oneapi-basekit:2025.0.0-devel-ubuntu22.04` |
+| `intel`  | `intel/oneapi-basekit:2025.3.1-0-devel-ubuntu22.04` |
 | `amd`    | `rocm/pytorch:latest`                          |
 | `cpu`    | `python:3.11-slim`                             |
 
@@ -91,8 +91,8 @@ Single `Dockerfile` with `ARG GPU_BACKEND=nvidia`.
 ARG GPU_BACKEND=nvidia
 
 FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04 AS base-nvidia
-FROM intel/oneapi-basekit:... AS base-intel
-FROM rocm/pytorch:... AS base-amd
+FROM intel/oneapi-basekit:2025.3.1-0-devel-ubuntu22.04 AS base-intel
+FROM rocm/rocm-terminal:6.4.4 AS base-amd
 FROM python:3.11-slim AS base-cpu
 
 FROM base-${GPU_BACKEND} AS runtime

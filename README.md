@@ -41,17 +41,17 @@ Each step is optional and can be run independently via separate endpoints.
 ### 2. Run with Docker Compose
 
 ```bash
-# NVIDIA (default)
+# NVIDIA (default — docker-compose.override.yml auto-loads GPU reservation)
 docker compose up -d
 
 # Intel Arc
-GPU_BACKEND=intel docker compose up -d --build
+GPU_BACKEND=intel docker compose -f docker-compose.yml -f docker-compose.intel.yml up -d --build
 
 # AMD Radeon
-GPU_BACKEND=amd docker compose up -d --build
+GPU_BACKEND=amd docker compose -f docker-compose.yml -f docker-compose.amd.yml up -d --build
 
 # CPU only
-GPU_BACKEND=cpu docker compose up -d --build
+GPU_BACKEND=cpu docker compose -f docker-compose.yml up -d --build
 ```
 
 This builds the image with the appropriate base (CUDA 12.8, oneAPI, ROCm, or Python 3.11-slim), starts the service on port **3334**, and creates a named volume for model caching.
@@ -171,26 +171,25 @@ Da kann man nichts machen
 | `PRELOAD_MODELS` | `false` | Load HDemucs + Whisper into memory at startup (slower start, faster first request) |
 | `JOB_TTL_SECONDS` | `3600` | Seconds before completed/failed jobs are automatically cleaned up |
 | `JOBS_DIR` | `/app/jobs` | Base directory for job input/output files |
-| `GPU_BACKEND` | auto-detect | Override GPU detection: `cuda`, `xpu`, `rocm`, or `cpu` |
+| `GPU_BACKEND` | auto-detect | Override GPU detection: `cuda`/`nvidia`, `xpu`/`intel`, `rocm`/`amd`, or `cpu` |
 
 ### Docker Compose
 
-The default `docker-compose.yml` configures:
+The base `docker-compose.yml` contains no GPU reservation. Per-backend override files handle device passthrough:
 
 - **Port**: `3334`
-- **GPU**: 1 NVIDIA GPU reserved (default; adjust for other vendors)
 - **Volume**: `model-cache` persists downloaded model weights (~5 GB) across container restarts
 - **Restart**: `unless-stopped`
 - **Build arg**: `GPU_BACKEND` selects base image and requirements
 
 #### GPU Device Passthrough
 
-| Backend | Docker config |
+| Backend | Compose command |
 |---|---|
-| NVIDIA | Default `docker-compose.yml` works as-is |
-| AMD | Add `devices: ["/dev/kfd", "/dev/dri"]`, remove `deploy.resources` section |
-| Intel | Add `devices: ["/dev/dri"]`, remove `deploy.resources` section |
-| CPU | Remove `deploy.resources` section entirely |
+| NVIDIA | `docker compose up` (override auto-loaded) |
+| Intel | `GPU_BACKEND=intel docker compose -f docker-compose.yml -f docker-compose.intel.yml up --build` |
+| AMD | `GPU_BACKEND=amd docker compose -f docker-compose.yml -f docker-compose.amd.yml up --build` |
+| CPU | `GPU_BACKEND=cpu docker compose -f docker-compose.yml up --build` |
 
 ## Local Development (Without Docker)
 
@@ -218,7 +217,11 @@ Optionally override auto-detection: `GPU_BACKEND=cpu uvicorn app.main:app --host
 
 ```
 ├── Dockerfile              # Multi-stage build with GPU_BACKEND arg
-├── docker-compose.yml      # Service definition with GPU reservation
+├── docker-compose.yml      # Base service definition (no GPU config)
+├── docker-compose.override.yml # NVIDIA GPU reservation (auto-loaded)
+├── docker-compose.nvidia.yml   # NVIDIA GPU reservation (explicit)
+├── docker-compose.intel.yml    # Intel Arc device passthrough
+├── docker-compose.amd.yml      # AMD ROCm device passthrough
 ├── requirements.txt        # Shared Python dependencies
 ├── requirements-nvidia.txt # PyTorch CUDA wheels
 ├── requirements-intel.txt  # PyTorch XPU + IPEX wheels

@@ -1,6 +1,5 @@
 soundfile
 faster-whisper
-openai-whisper
 lyricsgenius
 mutagen
 fastapi[standard]

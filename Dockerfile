@@ -3,7 +3,7 @@ ARG GPU_BACKEND=nvidia
 # ── Base images per backend ────────────────────────────────────────────────
 FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04 AS base-nvidia
 FROM intel/oneapi-basekit:2025.3.1-0-devel-ubuntu22.04 AS base-intel
-FROM rocm/dev-ubuntu-22.04:6.4.4 AS base-amd
+FROM rocm/rocm-terminal:6.4.4 AS base-amd
 FROM python:3.11-slim AS base-cpu
 
 # ── Runtime stage ──────────────────────────────────────────────────────────

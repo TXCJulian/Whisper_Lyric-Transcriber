@@ -1,0 +1,14 @@
+# Default override — automatically loaded by `docker compose up`
+# Reserves an NVIDIA GPU. For other backends, use the explicit override files:
+#   GPU_BACKEND=intel docker compose -f docker-compose.yml -f docker-compose.intel.yml up --build
+#   GPU_BACKEND=amd   docker compose -f docker-compose.yml -f docker-compose.amd.yml up --build
+#   GPU_BACKEND=cpu   docker compose up --build
+services:
+  lyric-transcriber:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

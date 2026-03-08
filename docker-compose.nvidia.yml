@@ -1,0 +1,11 @@
+# NVIDIA GPU override — used automatically via docker-compose.override.yml
+# or explicitly: docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up
+services:
+  lyric-transcriber:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

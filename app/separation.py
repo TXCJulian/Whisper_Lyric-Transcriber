@@ -7,7 +7,7 @@ import torchaudio
 from torchaudio.pipelines import HDEMUCS_HIGH_MUSDB_PLUS
 import soundfile as sf
 
-from app.gpu_backend import get_device, empty_cache
+from app.gpu_backend import get_device, get_backend, empty_cache
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +22,19 @@ def load_model():
         _device = get_device()
         bundle = HDEMUCS_HIGH_MUSDB_PLUS
         _sample_rate = bundle.sample_rate
-        _model = bundle.get_model().to(_device)
-        _model.eval()
+        try:
+            _model = bundle.get_model().to(_device)
+        except (RuntimeError, NotImplementedError):
+            if get_backend() == "xpu":
+                logger.warning(
+                    "HDemucs failed to load on XPU (unsupported operators), "
+                    "falling back to CPU for vocal separation"
+                )
+                _device = torch.device("cpu")
+                _model = bundle.get_model().to(_device)
+            else:
+                raise
+        _model.train(False)  # set to inference mode
         logger.info(f"HDemucs model loaded on {_device}")
     return _model, _device, _sample_rate
 

@@ -29,6 +29,9 @@ def _detect_backend() -> str:
 def _resolve_backend() -> str:
     """Resolve backend from env var override or auto-detection."""
     override = os.getenv("GPU_BACKEND", "").lower().strip()
+    # Accept Docker build-arg names as aliases
+    _aliases = {"nvidia": "cuda", "intel": "xpu", "amd": "rocm"}
+    override = _aliases.get(override, override)
     valid = ("cuda", "xpu", "rocm", "cpu")
     if override in valid:
         logger.info(f"GPU backend override: {override}")
