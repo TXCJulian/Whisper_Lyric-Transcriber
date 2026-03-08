@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        GPU_BACKEND: ${GPU_BACKEND:-nvidia}
     image: lyric-transcriber:latest
     container_name: lyric-transcriber
     restart: unless-stopped
@@ -10,6 +12,7 @@ services:
       - GENIUS_ACCESS_TOKEN=${GENIUS_ACCESS_TOKEN}
       - PRELOAD_MODELS=true
       - JOB_TTL_SECONDS=3600
+      - GPU_BACKEND=${GPU_BACKEND:-nvidia}
     ports:
       - "3334:3334"
     volumes:
