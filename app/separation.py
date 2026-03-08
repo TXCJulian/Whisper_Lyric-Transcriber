@@ -7,18 +7,13 @@ import torchaudio
 from torchaudio.pipelines import HDEMUCS_HIGH_MUSDB_PLUS
 import soundfile as sf
 
+from app.gpu_backend import get_device, empty_cache
+
 logger = logging.getLogger(__name__)
 
 _model = None
 _device = None
 _sample_rate = None
-
-
-def get_device() -> torch.device:
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    logger.warning("CUDA not available, falling back to CPU (will be very slow)")
-    return torch.device("cpu")
 
 
 def load_model():
@@ -40,8 +35,7 @@ def unload_model():
         _model.cpu()
         del _model
         _model = None
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+        empty_cache()
         logger.info("HDemucs model unloaded from GPU")
 
 

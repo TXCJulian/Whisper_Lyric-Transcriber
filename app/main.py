@@ -4,7 +4,6 @@ import zipfile
 import logging
 from contextlib import asynccontextmanager
 
-import torch
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from dotenv import load_dotenv
@@ -19,16 +18,14 @@ from app.models import (
 from app.job_manager import JobManager
 from app.pipeline import run_full_pipeline
 from app.separation import separate_vocals, load_model as load_separation_model
-from app.transcription import (
-    transcribe,
-    write_output_files,
-    get_model as get_whisper_model,
-)
+from app.transcription_engine import get_engine
+from app.transcription import write_output_files
 from app.correction import (
     fetch_genius_lyrics,
     correct_transcription,
     get_metadata_from_file,
 )
+from app.gpu_backend import get_backend, get_device_name, use_faster_whisper
 
 load_dotenv()
 logging.basicConfig(
@@ -41,14 +38,18 @@ job_manager = JobManager(max_workers=1)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info(f"CUDA available: {torch.cuda.is_available()}")
-    if torch.cuda.is_available():
-        logger.info(f"GPU: {torch.cuda.get_device_name(0)}")
+    backend = get_backend()
+    device_name = get_device_name()
+    logger.info(f"GPU backend: {backend} ({device_name})")
+
+    engine = get_engine()
+    engine_name = "faster-whisper" if use_faster_whisper() else "openai-whisper"
+    logger.info(f"Transcription engine: {engine_name}")
 
     if os.getenv("PRELOAD_MODELS", "").lower() == "true":
         logger.info("Preloading models...")
         load_separation_model()
-        get_whisper_model()
+        engine.load_model()
         logger.info("Models preloaded")
 
     yield
@@ -65,8 +66,9 @@ app = FastAPI(title="Lyric Transcriber API", version="1.0.0", lifespan=lifespan)
 def health():
     return {
         "status": "ok",
-        "cuda_available": torch.cuda.is_available(),
-        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+        "gpu_backend": get_backend(),
+        "gpu_name": get_device_name(),
+        "transcription_engine": "faster-whisper" if use_faster_whisper() else "openai-whisper",
     }
 
 
@@ -161,7 +163,8 @@ async def submit_transcribe_only(
 
     def task(progress_callback, warning_callback, **kwargs):
         progress_callback("Transcribing...")
-        segments, _ = transcribe(
+        engine = get_engine()
+        segments, _ = engine.transcribe(
             kwargs["input_path"],
             model_size=kwargs["whisper_model"],
             language=kwargs["language"],
@@ -221,7 +224,8 @@ async def submit_correct(
 
     def task(progress_callback, warning_callback, **kwargs):
         progress_callback("Transcribing for correction...")
-        segments, _ = transcribe(
+        engine = get_engine()
+        segments, _ = engine.transcribe(
             kwargs["input_path"],
             artist=kwargs["artist"],
             title=kwargs["title"],

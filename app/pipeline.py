@@ -3,7 +3,8 @@ import logging
 from typing import Callable
 
 from app.separation import separate_vocals, unload_model as unload_separation_model
-from app.transcription import transcribe, write_output_files
+from app.transcription import write_output_files
+from app.transcription_engine import get_engine
 from app.correction import get_metadata_from_file, fetch_genius_lyrics, correct_transcription
 
 logger = logging.getLogger(__name__)
@@ -48,7 +49,7 @@ def run_full_pipeline(
     lookup_artist = artist or file_artist
     lookup_title = title or file_title
 
-    segments, detected_lang = transcribe(
+    segments, detected_lang = get_engine().transcribe(
         vocals_path,
         model_size=whisper_model,
         language=language,
