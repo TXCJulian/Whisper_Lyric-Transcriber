@@ -1,8 +1,6 @@
---extra-index-url https://download.pytorch.org/whl/cu128
-torch
-torchaudio
 soundfile
 faster-whisper
+openai-whisper
 lyricsgenius
 mutagen
 fastapi[standard]

@@ -1,0 +1,5 @@
+--extra-index-url https://pytorch-extension.intel.com/release-whl/stable/xpu/us/
+torch
+torchaudio
+intel-extension-for-pytorch
+-r requirements.txt
