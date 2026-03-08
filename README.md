@@ -13,15 +13,18 @@ Audio Upload ─► Vocal Separation (HDemucs) ─► Transcription (faster-whis
 ```
 
 1. **Vocal Separation** — Isolates vocals from the audio using HDemucs (`HDEMUCS_HIGH_MUSDB_PLUS` via torchaudio). Long tracks are chunked into 30s windows with overlap to stay within VRAM limits. The model is unloaded after this step to free GPU memory for Whisper.
-2. **Transcription** — Converts vocals to text with word-level timestamps using faster-whisper (`large-v3-turbo`). VAD filtering removes silence. An initial prompt with artist/title is passed to improve proper name recognition.
+2. **Transcription** — Converts vocals to text with word-level timestamps. Uses faster-whisper (CTranslate2) on NVIDIA/CPU or OpenAI Whisper (PyTorch) on Intel XPU/AMD ROCm. VAD filtering removes silence. An initial prompt with artist/title is passed to improve proper name recognition.
 3. **Lyrics Correction** — Fetches reference lyrics from Genius and applies word-level fuzzy matching (`difflib.SequenceMatcher`) to fix transcription errors. Splits long lines at natural break points based on the Genius line structure. Handles Genius's Cyrillic/Greek homoglyph copy-protection by mapping them back to Latin equivalents.
 
 Each step is optional and can be run independently via separate endpoints.
 
 ## Requirements
 
-- Docker with NVIDIA Container Toolkit (recommended)
-- NVIDIA GPU with CUDA support (CPU fallback available but slow)
+- Docker (recommended)
+- A supported GPU (optional, CPU fallback available):
+  - **NVIDIA** — NVIDIA Container Toolkit + CUDA GPU
+  - **Intel Arc** — Intel GPU with oneAPI/Level Zero drivers
+  - **AMD Radeon** — ROCm-supported GPU
 - Genius API access token (for lyrics correction)
 
 ## Quick Start
@@ -38,10 +41,20 @@ Each step is optional and can be run independently via separate endpoints.
 ### 2. Run with Docker Compose
 
 ```bash
+# NVIDIA (default)
 docker compose up -d
+
+# Intel Arc
+GPU_BACKEND=intel docker compose up -d --build
+
+# AMD Radeon
+GPU_BACKEND=amd docker compose up -d --build
+
+# CPU only
+GPU_BACKEND=cpu docker compose up -d --build
 ```
 
-This builds the image (CUDA 12.8 + Python 3.11), starts the service on port **3334**, and creates a named volume for model caching.
+This builds the image with the appropriate base (CUDA 12.8, oneAPI, ROCm, or Python 3.11-slim), starts the service on port **3334**, and creates a named volume for model caching.
 
 ### 3. Verify
 
@@ -50,7 +63,7 @@ curl http://localhost:3334/health
 ```
 
 ```json
-{"status": "ok", "cuda_available": true, "gpu": "NVIDIA GeForce RTX ..."}
+{"status": "ok", "gpu_backend": "cuda", "gpu_name": "NVIDIA GeForce RTX ...", "transcription_engine": "faster-whisper"}
 ```
 
 ## API Reference
@@ -61,7 +74,7 @@ All processing endpoints are asynchronous — they return a `job_id` immediately
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/health` | Service status, CUDA availability, GPU name |
+| `GET` | `/health` | Service status, GPU backend, GPU name, transcription engine |
 
 ### Processing Endpoints
 
@@ -158,15 +171,26 @@ Da kann man nichts machen
 | `PRELOAD_MODELS` | `false` | Load HDemucs + Whisper into memory at startup (slower start, faster first request) |
 | `JOB_TTL_SECONDS` | `3600` | Seconds before completed/failed jobs are automatically cleaned up |
 | `JOBS_DIR` | `/app/jobs` | Base directory for job input/output files |
+| `GPU_BACKEND` | auto-detect | Override GPU detection: `cuda`, `xpu`, `rocm`, or `cpu` |
 
 ### Docker Compose
 
 The default `docker-compose.yml` configures:
 
 - **Port**: `3334`
-- **GPU**: 1 NVIDIA GPU reserved
+- **GPU**: 1 NVIDIA GPU reserved (default; adjust for other vendors)
 - **Volume**: `model-cache` persists downloaded model weights (~5 GB) across container restarts
 - **Restart**: `unless-stopped`
+- **Build arg**: `GPU_BACKEND` selects base image and requirements
+
+#### GPU Device Passthrough
+
+| Backend | Docker config |
+|---|---|
+| NVIDIA | Default `docker-compose.yml` works as-is |
+| AMD | Add `devices: ["/dev/kfd", "/dev/dri"]`, remove `deploy.resources` section |
+| Intel | Add `devices: ["/dev/dri"]`, remove `deploy.resources` section |
+| CPU | Remove `deploy.resources` section entirely |
 
 ## Local Development (Without Docker)
 
@@ -175,10 +199,12 @@ python -m venv .venv
 .venv\Scripts\activate  # Windows
 # source .venv/bin/activate  # Linux/macOS
 
-pip install -r requirements.txt
+# Install for your GPU:
+pip install -r requirements-nvidia.txt   # NVIDIA CUDA
+pip install -r requirements-intel.txt    # Intel Arc
+pip install -r requirements-amd.txt      # AMD Radeon
+pip install -r requirements-cpu.txt      # CPU only
 ```
-
-Requires PyTorch with CUDA support. The `requirements.txt` pulls wheels from the `cu128` index.
 
 Start the server:
 
@@ -186,12 +212,18 @@ Start the server:
 uvicorn app.main:app --host 0.0.0.0 --port 3334
 ```
 
+Optionally override auto-detection: `GPU_BACKEND=cpu uvicorn app.main:app --host 0.0.0.0 --port 3334`
+
 ## Project Structure
 
 ```
-├── Dockerfile              # CUDA 12.8 + Python 3.11 runtime image
+├── Dockerfile              # Multi-stage build with GPU_BACKEND arg
 ├── docker-compose.yml      # Service definition with GPU reservation
-├── requirements.txt        # Python dependencies (PyTorch cu128, FastAPI, etc.)
+├── requirements.txt        # Shared Python dependencies
+├── requirements-nvidia.txt # PyTorch CUDA wheels
+├── requirements-intel.txt  # PyTorch XPU + IPEX wheels
+├── requirements-amd.txt    # PyTorch ROCm wheels
+├── requirements-cpu.txt    # PyTorch CPU wheels
 ├── .env                    # Genius API token (not committed)
 └── app/
     ├── main.py             # FastAPI app, route handlers, startup logic
@@ -199,7 +231,9 @@ uvicorn app.main:app --host 0.0.0.0 --port 3334
     ├── job_manager.py      # Async job queue with threading, TTL eviction
     ├── pipeline.py         # Orchestrates separation → transcription → correction
     ├── separation.py       # HDemucs vocal separation with chunked processing
-    ├── transcription.py    # faster-whisper STT, LRC/TXT output generation
+    ├── transcription.py    # Data classes (Segment, WordTiming), LRC/TXT output
+    ├── transcription_engine.py # Engine abstraction (faster-whisper / OpenAI Whisper)
+    ├── gpu_backend.py      # GPU vendor detection (CUDA/XPU/ROCm/CPU)
     └── correction.py       # Genius lyrics fetch, homoglyph cleanup, word-level alignment
 ```
 
@@ -222,10 +256,11 @@ Artist and title for the Genius lookup are read from audio metadata tags (via mu
 |---|---|
 | HTTP Server | FastAPI + Uvicorn |
 | Vocal Separation | HDemucs (`torchaudio.pipelines`) |
-| Speech-to-Text | faster-whisper (CTranslate2) |
+| Speech-to-Text | faster-whisper (CUDA/CPU), OpenAI Whisper (XPU/ROCm) |
 | Lyrics Reference | Genius API (`lyricsgenius`) |
 | Audio Metadata | mutagen |
-| Container Runtime | Docker, NVIDIA CUDA 12.8 |
+| GPU Support | NVIDIA CUDA, Intel XPU (IPEX), AMD ROCm, CPU fallback |
+| Container Runtime | Docker, multi-stage build |
 
 ## License
 

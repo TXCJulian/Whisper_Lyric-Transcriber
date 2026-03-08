@@ -1,4 +1,4 @@
---extra-index-url https://download.pytorch.org/whl/rocm6.3
+--extra-index-url https://download.pytorch.org/whl/rocm6.4
 torch
 torchaudio
 -r requirements.txt
