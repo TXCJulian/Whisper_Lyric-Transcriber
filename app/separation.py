@@ -24,7 +24,7 @@ def load_model():
         _sample_rate = bundle.sample_rate
         try:
             _model = bundle.get_model().to(_device)
-        except (RuntimeError, NotImplementedError):
+        except (RuntimeError, NotImplementedError, AssertionError):
             if get_backend() == "xpu":
                 logger.warning(
                     "HDemucs failed to load on XPU (unsupported operators), "

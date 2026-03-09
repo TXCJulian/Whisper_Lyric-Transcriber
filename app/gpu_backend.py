@@ -26,6 +26,17 @@ def _detect_backend() -> str:
     return "cpu"
 
 
+def _is_backend_available(backend: str) -> bool:
+    """Check if the requested backend is actually usable in this torch build."""
+    if backend == "cuda":
+        return torch.cuda.is_available()
+    if backend == "rocm":
+        return torch.cuda.is_available() and hasattr(torch.version, "hip") and bool(torch.version.hip)
+    if backend == "xpu":
+        return hasattr(torch, "xpu") and torch.xpu.is_available()
+    return True  # CPU is always available
+
+
 def _resolve_backend() -> str:
     """Resolve backend from env var override or auto-detection."""
     override = os.getenv("GPU_BACKEND", "").lower().strip()
@@ -34,8 +45,14 @@ def _resolve_backend() -> str:
     override = _aliases.get(override, override)
     valid = ("cuda", "xpu", "rocm", "cpu")
     if override in valid:
-        logger.info(f"GPU backend override: {override}")
-        return override
+        if _is_backend_available(override):
+            logger.info(f"GPU backend override: {override}")
+            return override
+        logger.warning(
+            f"GPU_BACKEND='{override}' requested but not available in this "
+            "torch build. Falling back to auto-detection."
+        )
+        return _detect_backend()
     if override:
         logger.warning(
             f"Invalid GPU_BACKEND='{override}', valid options: {valid}. "
