@@ -3,9 +3,10 @@ import re
 import time
 import difflib
 import logging
+from collections.abc import Sequence
 
 import lyricsgenius
-from mutagen import File as MutagenFile
+from mutagen._file import File as MutagenFile
 
 from app.transcription import Segment, WordTiming
 
@@ -181,6 +182,25 @@ def _clean_genius_lyrics(lyrics: str, title: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _genius_search(genius, search_term: str, max_retries: int) -> list[dict]:
+    """Execute a Genius search with retry logic. Returns list of hits."""
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = genius.search(search_term, per_page=20)
+            return response.get("hits", []) if response else []
+        except Exception as e:
+            if attempt < max_retries:
+                wait = 2 ** (attempt - 1)
+                logger.warning(
+                    f"Genius search attempt {attempt}/{max_retries} failed: {e}. "
+                    f"Retrying in {wait}s..."
+                )
+                time.sleep(wait)
+            else:
+                logger.warning(f"Genius search failed after {max_retries} attempts: {e}")
+    return []
+
+
 def fetch_genius_lyrics(
     artist: str, title: str, max_retries: int = 3
 ) -> str | None:
@@ -188,6 +208,12 @@ def fetch_genius_lyrics(
 
     Searches for multiple candidates and picks the one whose artist + title
     best matches the query, avoiding the "most popular hit wins" problem.
+
+    Uses two search strategies in sequence:
+    1. "{title} {artist}" — primary, most specific
+    2. "{title}" only — fallback when the primary yields a weak title match
+       (catches cases where the correct song falls outside the top 20 of the
+       combined query but ranks highly on a title-only search)
     """
     token = os.getenv("GENIUS_ACCESS_TOKEN")
     if not token:
@@ -200,37 +226,31 @@ def fetch_genius_lyrics(
     search_title = _sanitize_query(title)
     logger.info(f"Genius search: artist='{search_artist}', title='{search_title}'")
 
-    search_term = f"{search_title} {search_artist}"
+    # Strategy 1: title + artist
+    hits = _genius_search(genius, f"{search_title} {search_artist}", max_retries)
+    match = _pick_best_hit(hits, artist, title) if hits else None
 
-    response = None
-    for attempt in range(1, max_retries + 1):
-        try:
-            response = genius.search(search_term, per_page=10)
-            break
-        except Exception as e:
-            if attempt < max_retries:
-                wait = 2 ** (attempt - 1)  # 1s, 2s, 4s
-                logger.warning(
-                    f"Genius lookup attempt {attempt}/{max_retries} failed: {e}. "
-                    f"Retrying in {wait}s..."
-                )
-                time.sleep(wait)
-            else:
-                logger.warning(
-                    f"Genius lookup failed after {max_retries} attempts "
-                    f"for '{artist} - {title}': {e}"
-                )
-                return None
+    # Strategy 2: title only — fall back when title match is weak (<0.95)
+    # This catches songs that rank beyond position 20 in the combined query
+    # but appear near the top of a title-only search.
+    if match is None or match[2] < 0.95:
+        title_sim_str = f"{match[2]:.2f}" if match else "0.00"
+        logger.info(
+            f"Genius primary search yielded weak title match "
+            f"(title_sim={title_sim_str}), retrying with title-only query"
+        )
+        fallback_hits = _genius_search(genius, search_title, max_retries)
+        fallback_match = _pick_best_hit(fallback_hits, artist, title) if fallback_hits else None
+        # Prefer whichever match has the higher combined similarity
+        if fallback_match is not None:
+            primary_combined = (match[1] + match[2]) if match else 0.0
+            fallback_combined = fallback_match[1] + fallback_match[2]
+            if fallback_combined > primary_combined:
+                logger.info("Genius fallback search produced a better match, using it")
+                match = fallback_match
 
-    if not response:
-        return None
-
-    hits = response.get("hits", [])
-    if not hits:
-        return None
-
-    match = _pick_best_hit(hits, artist, title)
     if match is None:
+        logger.warning(f"Genius: no acceptable match found for '{artist} - {title}'")
         return None
 
     song_info = match[0]
@@ -249,7 +269,7 @@ def _clean_word(w: str) -> str:
 
 
 def _estimate_insert_timing(
-    opcodes: list[tuple[str, int, int, int, int]],
+    opcodes: Sequence[tuple[str, int, int, int, int]],
     op_idx: int,
     whisper_words: list[WordTiming],
     count: int,
