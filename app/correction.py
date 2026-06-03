@@ -220,7 +220,7 @@ def fetch_genius_lyrics(
         logger.error("GENIUS_ACCESS_TOKEN not set")
         return None
 
-    genius = lyricsgenius.Genius(token, verbose=False, timeout=15)
+    genius = lyricsgenius.Genius(token, timeout=15)
 
     search_artist = _primary_artist(artist)
     search_title = _sanitize_query(title)

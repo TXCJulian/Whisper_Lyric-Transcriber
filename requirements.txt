@@ -1,6 +1,6 @@
 soundfile
 faster-whisper
-lyricsgenius
+lyricsgenius>=3.0.0
 mutagen
 fastapi[standard]
 uvicorn[standard]
