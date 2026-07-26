@@ -33,9 +33,15 @@ Each step is optional and can be run independently via separate endpoints.
 
 1. Create an API client at https://genius.com/api-clients
 2. Copy your access token
-3. Create a `.env` file in the project root:
-   ```
+3. Create a `.env` file in the project root (see `.env.example`):
+
+   ```bash
    GENIUS_ACCESS_TOKEN=your_token_here
+
+   # Optional: speeds up the first model download (~5 GB) by lifting the
+   # anonymous Hugging Face rate limit. Create one at
+   # https://huggingface.co/settings/tokens with read scope.
+   HF_TOKEN=
    ```
 
 ### 2. Run with Docker Compose
@@ -168,6 +174,7 @@ Da kann man nichts machen
 | Variable | Default | Description |
 |---|---|---|
 | `GENIUS_ACCESS_TOKEN` | *(required)* | Genius API token for lyrics correction |
+| `HF_TOKEN` | *(optional)* | Hugging Face token. Lifts the anonymous rate limit, speeding up the first model download (~5 GB). Get one at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) (read scope) |
 | `PRELOAD_MODELS` | `false` | Load HDemucs + Whisper into memory at startup (slower start, faster first request) |
 | `JOB_TTL_SECONDS` | `3600` | Seconds before completed/failed jobs are automatically cleaned up |
 | `JOBS_DIR` | `/app/jobs` | Base directory for job input/output files |

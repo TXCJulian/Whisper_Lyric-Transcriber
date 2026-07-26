@@ -10,6 +10,10 @@ services:
     restart: unless-stopped
     environment:
       - GENIUS_ACCESS_TOKEN=${GENIUS_ACCESS_TOKEN}
+      # Optional. A Hugging Face token lifts the anonymous download rate limit,
+      # which makes the first model download (~5 GB) noticeably faster. Leave
+      # unset to download anonymously.
+      - HF_TOKEN=${HF_TOKEN:-}
       - PRELOAD_MODELS=true
       - JOB_TTL_SECONDS=3600
       - GPU_BACKEND=${GPU_BACKEND:-nvidia}
