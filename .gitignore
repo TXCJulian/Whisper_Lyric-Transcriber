@@ -17,3 +17,5 @@ app/__pycache__/
 Thumbs.db
 .claude/settings.local.json
 CLAUDE.md
+
+.playwright-mcp/
