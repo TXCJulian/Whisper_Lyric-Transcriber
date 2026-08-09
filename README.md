@@ -22,9 +22,9 @@ Each step is optional and can be run independently via separate endpoints.
 
 - Docker (recommended)
 - A supported GPU (optional, CPU fallback available):
-  - **NVIDIA** — NVIDIA Container Toolkit + CUDA GPU
-  - **Intel Arc** — Intel GPU with oneAPI/Level Zero drivers
-  - **AMD Radeon** — ROCm-supported GPU
+  - **NVIDIA** — NVIDIA Container Toolkit + CUDA GPU — **the only backend verified to work end-to-end**
+  - **Intel Arc** — Intel GPU with oneAPI/Level Zero drivers. Requires **Above 4G Decoding** and **Resizable BAR** enabled in the system BIOS/UEFI, or the GPU will not be usable by the container. ⚠️ **Untested** — the Docker image builds and the CI pipeline publishes it, but the pipeline has not been run against real Intel Arc hardware.
+  - **AMD Radeon** — ROCm-supported GPU. ⚠️ **Untested** — the Docker image builds and the CI pipeline publishes it, but the pipeline has not been run against real AMD hardware.
 - Genius API access token (for lyrics correction)
 
 ## Quick Start
@@ -61,6 +61,18 @@ GPU_BACKEND=cpu docker compose -f docker-compose.yml up -d --build
 ```
 
 This builds the image with the appropriate base (CUDA 12.8, oneAPI, ROCm, or Python 3.11-slim), starts the service on port **3334**, and creates a named volume for model caching.
+
+#### Prebuilt Images
+
+CI publishes prebuilt images to GitHub Container Registry on every push to `master`:
+
+| Backend | Image |
+|---|---|
+| NVIDIA | `ghcr.io/txcjulian/whisper-lyric-transcriber:latest-nvidia` |
+| Intel Arc | `ghcr.io/txcjulian/whisper-lyric-transcriber:latest-intel` |
+| AMD Radeon | `ghcr.io/txcjulian/whisper-lyric-transcriber:latest-amd` |
+
+Only the NVIDIA image is verified to work end-to-end — see [Requirements](#requirements) for the Intel/AMD caveats.
 
 ### 3. Verify
 
@@ -179,6 +191,8 @@ Da kann man nichts machen
 | `JOB_TTL_SECONDS` | `3600` | Seconds before completed/failed jobs are automatically cleaned up |
 | `JOBS_DIR` | `/app/jobs` | Base directory for job input/output files |
 | `GPU_BACKEND` | auto-detect | Override GPU detection: `cuda`/`nvidia`, `xpu`/`intel`, `rocm`/`amd`, or `cpu` |
+| `PUID` | `1000` | UID the container process runs as (container runs as a non-root `appuser`) |
+| `PGID` | `1000` | GID the container process runs as |
 
 ### Docker Compose
 
