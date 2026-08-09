@@ -62,6 +62,18 @@ GPU_BACKEND=cpu docker compose -f docker-compose.yml up -d --build
 
 This builds the image with the appropriate base (CUDA 12.8, oneAPI, ROCm, or Python 3.11-slim), starts the service on port **3334**, and creates a named volume for model caching.
 
+#### Prebuilt Images
+
+CI publishes prebuilt images to GitHub Container Registry on every push to `master`:
+
+| Backend | Image |
+|---|---|
+| NVIDIA | `ghcr.io/txcjulian/whisper-lyric-transcriber:latest-nvidia` |
+| Intel Arc | `ghcr.io/txcjulian/whisper-lyric-transcriber:latest-intel` |
+| AMD Radeon | `ghcr.io/txcjulian/whisper-lyric-transcriber:latest-amd` |
+
+Only the NVIDIA image is verified to work end-to-end — see [Requirements](#requirements) for the Intel/AMD caveats.
+
 ### 3. Verify
 
 ```bash
