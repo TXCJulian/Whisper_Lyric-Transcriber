@@ -10,6 +10,7 @@ FROM python:3.11-slim AS base-cpu
 FROM base-${GPU_BACKEND} AS runtime
 
 ARG GPU_BACKEND=nvidia
+USER root
 ENV DEBIAN_FRONTEND=noninteractive
 ENV GPU_BACKEND=${GPU_BACKEND}
 
@@ -25,6 +26,7 @@ RUN if [ "$GPU_BACKEND" != "cpu" ]; then \
             ffmpeg \
             libsndfile1 \
             curl \
+            gosu \
         && rm -rf /var/lib/apt/lists/* \
         && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
         && ln -sf /usr/bin/python3.11 /usr/bin/python \
@@ -33,6 +35,7 @@ RUN if [ "$GPU_BACKEND" != "cpu" ]; then \
         apt-get update && apt-get install -y \
             ffmpeg \
             libsndfile1 \
+            gosu \
         && rm -rf /var/lib/apt/lists/*; \
     fi
 
@@ -43,11 +46,20 @@ COPY requirements.txt requirements-${GPU_BACKEND}.txt ./
 RUN python3 -m pip install --no-cache-dir -r requirements-${GPU_BACKEND}.txt
 
 COPY app/ ./app/
+COPY entrypoint.sh /entrypoint.sh
 
 ENV TORCH_HOME=/app/models/torch
 ENV HF_HOME=/app/models/huggingface
 ENV PYTHONUNBUFFERED=1
 
+# Non-root runtime user. UID/GID are re-mapped at container start via PUID/PGID.
+RUN groupadd -g 1000 appgroup \
+    && useradd -u 1000 -g appgroup -M -s /bin/false appuser \
+    && mkdir -p /app/models /app/jobs \
+    && chown -R appuser:appgroup /app \
+    && chmod +x /entrypoint.sh
+
 EXPOSE 3334
 
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3334", "--no-access-log"]

@@ -179,6 +179,8 @@ Da kann man nichts machen
 | `JOB_TTL_SECONDS` | `3600` | Seconds before completed/failed jobs are automatically cleaned up |
 | `JOBS_DIR` | `/app/jobs` | Base directory for job input/output files |
 | `GPU_BACKEND` | auto-detect | Override GPU detection: `cuda`/`nvidia`, `xpu`/`intel`, `rocm`/`amd`, or `cpu` |
+| `PUID` | `1000` | UID the container process runs as (container runs as a non-root `appuser`) |
+| `PGID` | `1000` | GID the container process runs as |
 
 ### Docker Compose
 
