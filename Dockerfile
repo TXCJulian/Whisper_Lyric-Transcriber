@@ -52,9 +52,10 @@ ENV TORCH_HOME=/app/models/torch
 ENV HF_HOME=/app/models/huggingface
 ENV PYTHONUNBUFFERED=1
 
-# Non-root runtime user. UID/GID are re-mapped at container start via PUID/PGID.
-RUN groupadd -g 1000 appgroup \
-    && useradd -u 1000 -g appgroup -M -s /bin/false appuser \
+# Non-root runtime user. IDs are assigned by the system (some base images
+# already occupy GID/UID 1000) and re-mapped to PUID/PGID at container start.
+RUN groupadd appgroup \
+    && useradd -g appgroup -M -s /bin/false appuser \
     && mkdir -p /app/models /app/jobs \
     && chown -R appuser:appgroup /app \
     && chmod +x /entrypoint.sh
