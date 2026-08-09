@@ -13,7 +13,7 @@ Audio Upload ─► Vocal Separation (HDemucs) ─► Transcription (faster-whis
 ```
 
 1. **Vocal Separation** — Isolates vocals from the audio using HDemucs (`HDEMUCS_HIGH_MUSDB_PLUS` via torchaudio). Long tracks are chunked into 30s windows with overlap to stay within VRAM limits. The model is unloaded after this step to free GPU memory for Whisper.
-2. **Transcription** — Converts vocals to text with word-level timestamps. Uses faster-whisper (CTranslate2) on NVIDIA/CPU or OpenAI Whisper (PyTorch) on Intel XPU/AMD ROCm. VAD filtering removes silence. An initial prompt with artist/title is passed to improve proper name recognition.
+2. **Transcription** — Converts vocals to text with word-level timestamps. Uses faster-whisper (CTranslate2) on NVIDIA/CPU or OpenAI Whisper (PyTorch) on Intel XPU/AMD ROCm. VAD filtering removes silence. An initial prompt with artist/title is passed to improve proper name recognition. The model is kept warm for `WHISPER_IDLE_UNLOAD_SECONDS` (default 15s) after each job so back-to-back requests skip the reload, then auto-unloads to free GPU memory when idle.
 3. **Lyrics Correction** — Fetches reference lyrics from Genius and applies word-level fuzzy matching (`difflib.SequenceMatcher`) to fix transcription errors. Splits long lines at natural break points based on the Genius line structure. Handles Genius's Cyrillic/Greek homoglyph copy-protection by mapping them back to Latin equivalents.
 
 Each step is optional and can be run independently via separate endpoints.
@@ -189,6 +189,7 @@ Da kann man nichts machen
 | `HF_TOKEN` | *(optional)* | Hugging Face token. Lifts the anonymous rate limit, speeding up the first model download (~5 GB). Get one at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) (read scope) |
 | `PRELOAD_MODELS` | `false` | Load HDemucs + Whisper into memory at startup (slower start, faster first request) |
 | `JOB_TTL_SECONDS` | `3600` | Seconds before completed/failed jobs are automatically cleaned up |
+| `WHISPER_IDLE_UNLOAD_SECONDS` | `15` | Seconds of inactivity before the Whisper model is auto-unloaded from GPU memory |
 | `JOBS_DIR` | `/app/jobs` | Base directory for job input/output files |
 | `GPU_BACKEND` | auto-detect | Override GPU detection: `cuda`/`nvidia`, `xpu`/`intel`, `rocm`/`amd`, or `cpu` |
 | `PUID` | `1000` | UID the container process runs as (container runs as a non-root `appuser`) |
