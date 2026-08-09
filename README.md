@@ -22,9 +22,9 @@ Each step is optional and can be run independently via separate endpoints.
 
 - Docker (recommended)
 - A supported GPU (optional, CPU fallback available):
-  - **NVIDIA** — NVIDIA Container Toolkit + CUDA GPU
-  - **Intel Arc** — Intel GPU with oneAPI/Level Zero drivers
-  - **AMD Radeon** — ROCm-supported GPU
+  - **NVIDIA** — NVIDIA Container Toolkit + CUDA GPU — **the only backend verified to work end-to-end**
+  - **Intel Arc** — Intel GPU with oneAPI/Level Zero drivers. Requires **Above 4G Decoding** and **Resizable BAR** enabled in the system BIOS/UEFI, or the GPU will not be usable by the container. ⚠️ **Untested** — the Docker image builds and the CI pipeline publishes it, but the pipeline has not been run against real Intel Arc hardware.
+  - **AMD Radeon** — ROCm-supported GPU. ⚠️ **Untested** — the Docker image builds and the CI pipeline publishes it, but the pipeline has not been run against real AMD hardware.
 - Genius API access token (for lyrics correction)
 
 ## Quick Start
