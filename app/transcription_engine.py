@@ -1,4 +1,6 @@
+import os
 import logging
+import threading
 from abc import ABC, abstractmethod
 from typing import Any, Callable
 
@@ -6,11 +8,24 @@ from app.transcription import Segment, WordTiming
 
 logger = logging.getLogger(__name__)
 
+IDLE_UNLOAD_SECONDS = float(os.getenv("WHISPER_IDLE_UNLOAD_SECONDS", "15"))
+
 
 class TranscriptionEngine(ABC):
-    """Base class for transcription engines."""
+    """Base class for transcription engines.
 
-    @abstractmethod
+    Wraps `_transcribe` with an idle-unload timer: after each call the model
+    stays resident for `IDLE_UNLOAD_SECONDS` in case another job follows
+    right away (e.g. a batch of songs), then frees GPU memory automatically.
+    """
+
+    def __init__(self):
+        self._idle_timer: threading.Timer | None = None
+        self._timer_lock = threading.Lock()
+        # Guards actual model access so the idle-unload timer can never fire
+        # concurrently with an in-progress _transcribe() call.
+        self._model_lock = threading.Lock()
+
     def transcribe(
         self,
         audio_path: str,
@@ -21,6 +36,55 @@ class TranscriptionEngine(ABC):
         language_callback: Callable[[str], None] | None = None,
     ) -> tuple[list[Segment], str]:
         """Transcribe audio. Returns (segments, detected_language)."""
+        self._cancel_idle_timer()
+        try:
+            with self._model_lock:
+                return self._transcribe(
+                    audio_path,
+                    model_size=model_size,
+                    language=language,
+                    artist=artist,
+                    title=title,
+                    language_callback=language_callback,
+                )
+        finally:
+            self._schedule_idle_unload()
+
+    def _cancel_idle_timer(self) -> None:
+        with self._timer_lock:
+            if self._idle_timer is not None:
+                self._idle_timer.cancel()
+                self._idle_timer = None
+
+    def _schedule_idle_unload(self) -> None:
+        with self._timer_lock:
+            if self._idle_timer is not None:
+                self._idle_timer.cancel()
+            timer = threading.Timer(IDLE_UNLOAD_SECONDS, self._idle_unload)
+            timer.daemon = True
+            self._idle_timer = timer
+            timer.start()
+
+    def _idle_unload(self) -> None:
+        with self._timer_lock:
+            self._idle_timer = None
+        logger.info(
+            f"No transcription for {IDLE_UNLOAD_SECONDS:.0f}s, unloading model"
+        )
+        with self._model_lock:
+            self.unload_model()
+
+    @abstractmethod
+    def _transcribe(
+        self,
+        audio_path: str,
+        model_size: str = "large-v3-turbo",
+        language: str | None = None,
+        artist: str | None = None,
+        title: str | None = None,
+        language_callback: Callable[[str], None] | None = None,
+    ) -> tuple[list[Segment], str]:
+        """Engine-specific transcription. Returns (segments, detected_language)."""
         ...
 
     @abstractmethod
@@ -38,6 +102,7 @@ class FasterWhisperEngine(TranscriptionEngine):
     """Transcription engine using faster-whisper (CTranslate2). For CUDA and CPU."""
 
     def __init__(self):
+        super().__init__()
         from app.gpu_backend import get_backend
         self._model: Any = None
         self._model_size: str | None = None
@@ -58,7 +123,7 @@ class FasterWhisperEngine(TranscriptionEngine):
             self._model_size = model_size
         return self._model
 
-    def transcribe(
+    def _transcribe(
         self,
         audio_path: str,
         model_size: str = "large-v3-turbo",
@@ -135,6 +200,7 @@ class OpenAIWhisperEngine(TranscriptionEngine):
     }
 
     def __init__(self):
+        super().__init__()
         from app.gpu_backend import get_device
         self._device = get_device()
         self._model = None
@@ -161,7 +227,7 @@ class OpenAIWhisperEngine(TranscriptionEngine):
             self._model_size = resolved
         return self._model
 
-    def transcribe(
+    def _transcribe(
         self,
         audio_path: str,
         model_size: str = "large-v3-turbo",
