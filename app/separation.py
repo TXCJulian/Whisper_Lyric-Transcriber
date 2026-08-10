@@ -90,7 +90,7 @@ def separate_vocals(
     # own separation script (models are trained on normalized audio).
     ref = waveform.mean(0)
     mean, std = ref.mean(), ref.std()
-    normalized = (waveform - mean) / std
+    normalized = (waveform - mean) / std.clamp(min=1e-8)
 
     # apply_model splits long tracks into overlapping segments internally
     # (bounded by the model's trained segment length) to stay within VRAM.

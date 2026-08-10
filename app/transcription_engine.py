@@ -22,6 +22,9 @@ class TranscriptionEngine(ABC):
     def __init__(self):
         self._idle_timer: threading.Timer | None = None
         self._timer_lock = threading.Lock()
+        # Guards actual model access so the idle-unload timer can never fire
+        # concurrently with an in-progress _transcribe() call.
+        self._model_lock = threading.Lock()
 
     def transcribe(
         self,
@@ -35,14 +38,15 @@ class TranscriptionEngine(ABC):
         """Transcribe audio. Returns (segments, detected_language)."""
         self._cancel_idle_timer()
         try:
-            return self._transcribe(
-                audio_path,
-                model_size=model_size,
-                language=language,
-                artist=artist,
-                title=title,
-                language_callback=language_callback,
-            )
+            with self._model_lock:
+                return self._transcribe(
+                    audio_path,
+                    model_size=model_size,
+                    language=language,
+                    artist=artist,
+                    title=title,
+                    language_callback=language_callback,
+                )
         finally:
             self._schedule_idle_unload()
 
@@ -67,7 +71,8 @@ class TranscriptionEngine(ABC):
         logger.info(
             f"No transcription for {IDLE_UNLOAD_SECONDS:.0f}s, unloading model"
         )
-        self.unload_model()
+        with self._model_lock:
+            self.unload_model()
 
     @abstractmethod
     def _transcribe(
