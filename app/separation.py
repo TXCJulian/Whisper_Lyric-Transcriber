@@ -12,7 +12,7 @@ from app.gpu_backend import get_device, get_backend, empty_cache
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_DEMUCS_MODEL = os.getenv("DEMUCS_MODEL", "htdemucs_ft")
+DEFAULT_DEMUCS_MODEL = os.getenv("DEMUCS_MODEL", "htdemucs")
 _segment_env = os.getenv("DEMUCS_SEGMENT_SECONDS")
 DEMUCS_SEGMENT_SECONDS = float(_segment_env) if _segment_env else None
 

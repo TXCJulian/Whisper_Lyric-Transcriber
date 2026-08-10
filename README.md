@@ -12,7 +12,7 @@ This project uses web scraping (via [`lyricsgenius`](https://github.com/johnwmil
 Audio Upload ─► Vocal Separation (Demucs) ─► Transcription (faster-whisper) ─► Lyrics Correction (Genius) ─► .lrc / .txt
 ```
 
-1. **Vocal Separation** — Isolates vocals from the audio using Demucs v4 (`htdemucs_ft` by default, configurable via `DEMUCS_MODEL`), the successor to the older HDemucs bundle previously used here. `apply_model()` splits long tracks into overlapping segments internally to stay within VRAM limits. The model is unloaded after this step to free GPU memory for Whisper.
+1. **Vocal Separation** — Isolates vocals from the audio using Demucs v4 (`htdemucs` by default, configurable via `DEMUCS_MODEL`), the successor to the older HDemucs bundle previously used here. `apply_model()` splits long tracks into overlapping segments internally to stay within VRAM limits. The model is unloaded after this step to free GPU memory for Whisper.
 2. **Transcription** — Converts vocals to text with word-level timestamps. Uses faster-whisper (CTranslate2) on NVIDIA/CPU or OpenAI Whisper (PyTorch) on Intel XPU/AMD ROCm. VAD filtering removes silence. An initial prompt with artist/title is passed to improve proper name recognition. The model is kept warm for `WHISPER_IDLE_UNLOAD_SECONDS` (default 15s) after each job so back-to-back requests skip the reload, then auto-unloads to free GPU memory when idle.
 3. **Lyrics Correction** — Fetches reference lyrics from Genius and applies word-level fuzzy matching (`difflib.SequenceMatcher`) to fix transcription errors. Splits long lines at natural break points based on the Genius line structure. Handles Genius's Cyrillic/Greek homoglyph copy-protection by mapping them back to Latin equivalents.
 
@@ -105,7 +105,7 @@ All accept `multipart/form-data` and return `{"job_id": "<id>"}`.
 | `file` | file | *(required)* | Audio file |
 | `format` | string | `lrc` | Output format: `lrc`, `txt`, or `all` |
 | `no_separation` | bool | `false` | Skip vocal separation (if vocals are already isolated) |
-| `demucs_model` | string | `htdemucs_ft` | Demucs model to use for vocal separation |
+| `demucs_model` | string | `htdemucs` | Demucs model to use for vocal separation |
 | `whisper_model` | string | `large-v3-turbo` | Whisper model to use |
 | `language` | string | auto-detect | Force language code (e.g. `de`, `en`) |
 | `artist` | string | from metadata | Artist name for Genius lookup (overrides audio metadata) |
@@ -117,7 +117,7 @@ All accept `multipart/form-data` and return `{"job_id": "<id>"}`.
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `file` | file | *(required)* | Audio file |
-| `demucs_model` | string | `htdemucs_ft` | Demucs model to use |
+| `demucs_model` | string | `htdemucs` | Demucs model to use |
 
 Returns the isolated vocals as a `.wav` file.
 
@@ -192,7 +192,7 @@ Da kann man nichts machen
 | `PRELOAD_MODELS` | `false` | Load Demucs + Whisper into memory at startup (slower start, faster first request) |
 | `JOB_TTL_SECONDS` | `3600` | Seconds before completed/failed jobs are automatically cleaned up |
 | `WHISPER_IDLE_UNLOAD_SECONDS` | `15` | Seconds of inactivity before the Whisper model is auto-unloaded from GPU memory |
-| `DEMUCS_MODEL` | `htdemucs_ft` | Demucs model name for vocal separation (e.g. `htdemucs` for faster/lower-latency single-pass separation) |
+| `DEMUCS_MODEL` | `htdemucs` | Demucs model name for vocal separation (e.g. `htdemucs` for faster/lower-latency single-pass separation) |
 | `DEMUCS_SEGMENT_SECONDS` | model default | Override the chunk length `apply_model()` uses to split long tracks; lower it if you hit GPU OOM on very long tracks |
 | `JOBS_DIR` | `/app/jobs` | Base directory for job input/output files |
 | `GPU_BACKEND` | auto-detect | Override GPU detection: `cuda`/`nvidia`, `xpu`/`intel`, `rocm`/`amd`, or `cpu` |
@@ -259,7 +259,7 @@ Optionally override auto-detection: `GPU_BACKEND=cpu uvicorn app.main:app --host
     ├── models.py           # Pydantic request/response models
     ├── job_manager.py      # Async job queue with threading, TTL eviction
     ├── pipeline.py         # Orchestrates separation → transcription → correction
-    ├── separation.py       # Demucs (htdemucs_ft) vocal separation
+    ├── separation.py       # Demucs (htdemucs) vocal separation
     ├── transcription.py    # Data classes (Segment, WordTiming), LRC/TXT output
     ├── transcription_engine.py # Engine abstraction (faster-whisper / OpenAI Whisper)
     ├── gpu_backend.py      # GPU vendor detection (CUDA/XPU/ROCm/CPU)
@@ -284,7 +284,7 @@ Artist and title for the Genius lookup are read from audio metadata tags (via mu
 | Component | Technology |
 | --- | --- |
 | HTTP Server | FastAPI + Uvicorn |
-| Vocal Separation | Demucs v4 (`htdemucs_ft` by default, via the `demucs` package) |
+| Vocal Separation | Demucs v4 (`htdemucs` by default, via the `demucs` package) |
 | Speech-to-Text | faster-whisper (CUDA/CPU), OpenAI Whisper (XPU/ROCm) |
 | Lyrics Reference | Genius API (`lyricsgenius`) |
 | Audio Metadata | mutagen |
