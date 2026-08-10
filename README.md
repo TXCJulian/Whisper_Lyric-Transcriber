@@ -8,11 +8,11 @@ This project uses web scraping (via [`lyricsgenius`](https://github.com/johnwmil
 
 ## Pipeline
 
-```
-Audio Upload ─► Vocal Separation (HDemucs) ─► Transcription (faster-whisper) ─► Lyrics Correction (Genius) ─► .lrc / .txt
+```text
+Audio Upload ─► Vocal Separation (Demucs) ─► Transcription (faster-whisper) ─► Lyrics Correction (Genius) ─► .lrc / .txt
 ```
 
-1. **Vocal Separation** — Isolates vocals from the audio using HDemucs (`HDEMUCS_HIGH_MUSDB_PLUS` via torchaudio). Long tracks are chunked into 30s windows with overlap to stay within VRAM limits. The model is unloaded after this step to free GPU memory for Whisper.
+1. **Vocal Separation** — Isolates vocals from the audio using Demucs v4 (`htdemucs_ft` by default, configurable via `DEMUCS_MODEL`), the successor to the older HDemucs bundle previously used here. `apply_model()` splits long tracks into overlapping segments internally to stay within VRAM limits. The model is unloaded after this step to free GPU memory for Whisper.
 2. **Transcription** — Converts vocals to text with word-level timestamps. Uses faster-whisper (CTranslate2) on NVIDIA/CPU or OpenAI Whisper (PyTorch) on Intel XPU/AMD ROCm. VAD filtering removes silence. An initial prompt with artist/title is passed to improve proper name recognition. The model is kept warm for `WHISPER_IDLE_UNLOAD_SECONDS` (default 15s) after each job so back-to-back requests skip the reload, then auto-unloads to free GPU memory when idle.
 3. **Lyrics Correction** — Fetches reference lyrics from Genius and applies word-level fuzzy matching (`difflib.SequenceMatcher`) to fix transcription errors. Splits long lines at natural break points based on the Genius line structure. Handles Genius's Cyrillic/Greek homoglyph copy-protection by mapping them back to Latin equivalents.
 
@@ -31,7 +31,7 @@ Each step is optional and can be run independently via separate endpoints.
 
 ### 1. Genius API Setup
 
-1. Create an API client at https://genius.com/api-clients
+1. Create an API client at [genius.com](https://genius.com/api-clients)
 2. Copy your access token
 3. Create a `.env` file in the project root (see `.env.example`):
 
@@ -67,7 +67,7 @@ This builds the image with the appropriate base (CUDA 12.8, oneAPI, ROCm, or Pyt
 CI publishes prebuilt images to GitHub Container Registry on every push to `master`:
 
 | Backend | Image |
-|---|---|
+| --- | --- |
 | NVIDIA | `ghcr.io/txcjulian/whisper-lyric-transcriber:latest-nvidia` |
 | Intel Arc | `ghcr.io/txcjulian/whisper-lyric-transcriber:latest-intel` |
 | AMD Radeon | `ghcr.io/txcjulian/whisper-lyric-transcriber:latest-amd` |
@@ -91,7 +91,7 @@ All processing endpoints are asynchronous — they return a `job_id` immediately
 ### Health
 
 | Method | Path | Description |
-|---|---|---|
+| --- | --- | --- |
 | `GET` | `/health` | Service status, GPU backend, GPU name, transcription engine |
 
 ### Processing Endpoints
@@ -101,10 +101,11 @@ All accept `multipart/form-data` and return `{"job_id": "<id>"}`.
 #### `POST /transcribe` — Full Pipeline
 
 | Field | Type | Default | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `file` | file | *(required)* | Audio file |
 | `format` | string | `lrc` | Output format: `lrc`, `txt`, or `all` |
 | `no_separation` | bool | `false` | Skip vocal separation (if vocals are already isolated) |
+| `demucs_model` | string | `htdemucs_ft` | Demucs model to use for vocal separation |
 | `whisper_model` | string | `large-v3-turbo` | Whisper model to use |
 | `language` | string | auto-detect | Force language code (e.g. `de`, `en`) |
 | `artist` | string | from metadata | Artist name for Genius lookup (overrides audio metadata) |
@@ -113,16 +114,17 @@ All accept `multipart/form-data` and return `{"job_id": "<id>"}`.
 
 #### `POST /separate` — Vocal Separation Only
 
-| Field | Type | Description |
-|---|---|---|
-| `file` | file | Audio file |
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `file` | file | *(required)* | Audio file |
+| `demucs_model` | string | `htdemucs_ft` | Demucs model to use |
 
 Returns the isolated vocals as a `.wav` file.
 
 #### `POST /transcribe-only` — Transcription Only
 
 | Field | Type | Default | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `file` | file | *(required)* | Audio file (should be vocals) |
 | `format` | string | `lrc` | Output format |
 | `whisper_model` | string | `large-v3-turbo` | Whisper model |
@@ -131,7 +133,7 @@ Returns the isolated vocals as a `.wav` file.
 #### `POST /correct` — Transcribe + Correct (No Separation)
 
 | Field | Type | Default | Description |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `file` | file | *(required)* | Audio file |
 | `artist` | string | *(required)* | Artist name for Genius lookup |
 | `title` | string | *(required)* | Song title for Genius lookup |
@@ -140,7 +142,7 @@ Returns the isolated vocals as a `.wav` file.
 ### Job Management
 
 | Method | Path | Description |
-|---|---|---|
+| --- | --- | --- |
 | `GET` | `/jobs/{job_id}` | Job status (`pending` / `processing` / `completed` / `failed`), progress message, errors, warnings |
 | `GET` | `/jobs/{job_id}/result` | Download result — single file directly, multiple files as ZIP, `204` if no output |
 | `GET` | `/jobs/{job_id}/result/info` | Result file metadata without downloading |
@@ -165,7 +167,7 @@ curl -o lyrics.lrc http://localhost:3334/jobs/$JOB_ID/result
 
 Timestamped lyrics in standard LRC format, compatible with most music players:
 
-```
+```text
 [00:10.96] Schon wieder Outro, oder was?
 [00:15.11] Da kann man nichts machen
 ```
@@ -174,7 +176,7 @@ Timestamped lyrics in standard LRC format, compatible with most music players:
 
 Plain text lyrics without timestamps:
 
-```
+```text
 Schon wieder Outro, oder was?
 Da kann man nichts machen
 ```
@@ -184,12 +186,14 @@ Da kann man nichts machen
 ### Environment Variables
 
 | Variable | Default | Description |
-|---|---|---|
+| --- | --- | --- |
 | `GENIUS_ACCESS_TOKEN` | *(required)* | Genius API token for lyrics correction |
 | `HF_TOKEN` | *(optional)* | Hugging Face token. Lifts the anonymous rate limit, speeding up the first model download (~5 GB). Get one at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens) (read scope) |
-| `PRELOAD_MODELS` | `false` | Load HDemucs + Whisper into memory at startup (slower start, faster first request) |
+| `PRELOAD_MODELS` | `false` | Load Demucs + Whisper into memory at startup (slower start, faster first request) |
 | `JOB_TTL_SECONDS` | `3600` | Seconds before completed/failed jobs are automatically cleaned up |
 | `WHISPER_IDLE_UNLOAD_SECONDS` | `15` | Seconds of inactivity before the Whisper model is auto-unloaded from GPU memory |
+| `DEMUCS_MODEL` | `htdemucs_ft` | Demucs model name for vocal separation (e.g. `htdemucs` for faster/lower-latency single-pass separation) |
+| `DEMUCS_SEGMENT_SECONDS` | model default | Override the chunk length `apply_model()` uses to split long tracks; lower it if you hit GPU OOM on very long tracks |
 | `JOBS_DIR` | `/app/jobs` | Base directory for job input/output files |
 | `GPU_BACKEND` | auto-detect | Override GPU detection: `cuda`/`nvidia`, `xpu`/`intel`, `rocm`/`amd`, or `cpu` |
 | `PUID` | `1000` | UID the container process runs as (container runs as a non-root `appuser`) |
@@ -207,7 +211,7 @@ The base `docker-compose.yml` contains no GPU reservation. Per-backend override 
 #### GPU Device Passthrough
 
 | Backend | Compose command |
-|---|---|
+| --- | --- |
 | NVIDIA | `docker compose up` (override auto-loaded) |
 | Intel | `GPU_BACKEND=intel docker compose -f docker-compose.yml -f docker-compose.intel.yml up --build` |
 | AMD | `GPU_BACKEND=amd docker compose -f docker-compose.yml -f docker-compose.amd.yml up --build` |
@@ -237,7 +241,7 @@ Optionally override auto-detection: `GPU_BACKEND=cpu uvicorn app.main:app --host
 
 ## Project Structure
 
-```
+```text
 ├── Dockerfile              # Multi-stage build with GPU_BACKEND arg
 ├── docker-compose.yml      # Base service definition (no GPU config)
 ├── docker-compose.override.yml # NVIDIA GPU reservation (auto-loaded)
@@ -255,7 +259,7 @@ Optionally override auto-detection: `GPU_BACKEND=cpu uvicorn app.main:app --host
     ├── models.py           # Pydantic request/response models
     ├── job_manager.py      # Async job queue with threading, TTL eviction
     ├── pipeline.py         # Orchestrates separation → transcription → correction
-    ├── separation.py       # HDemucs vocal separation with chunked processing
+    ├── separation.py       # Demucs (htdemucs_ft) vocal separation
     ├── transcription.py    # Data classes (Segment, WordTiming), LRC/TXT output
     ├── transcription_engine.py # Engine abstraction (faster-whisper / OpenAI Whisper)
     ├── gpu_backend.py      # GPU vendor detection (CUDA/XPU/ROCm/CPU)
@@ -278,9 +282,9 @@ Artist and title for the Genius lookup are read from audio metadata tags (via mu
 ## Tech Stack
 
 | Component | Technology |
-|---|---|
+| --- | --- |
 | HTTP Server | FastAPI + Uvicorn |
-| Vocal Separation | HDemucs (`torchaudio.pipelines`) |
+| Vocal Separation | Demucs v4 (`htdemucs_ft` by default, via the `demucs` package) |
 | Speech-to-Text | faster-whisper (CUDA/CPU), OpenAI Whisper (XPU/ROCm) |
 | Lyrics Reference | Genius API (`lyricsgenius`) |
 | Audio Metadata | mutagen |

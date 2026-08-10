@@ -1,4 +1,5 @@
 soundfile
+demucs
 faster-whisper
 lyricsgenius>=3.0.0
 mutagen

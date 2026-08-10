@@ -17,7 +17,11 @@ from app.models import (
 )
 from app.job_manager import JobManager
 from app.pipeline import run_full_pipeline
-from app.separation import separate_vocals, load_model as load_separation_model
+from app.separation import (
+    separate_vocals,
+    load_model as load_separation_model,
+    DEFAULT_DEMUCS_MODEL,
+)
 from app.transcription_engine import get_engine
 from app.transcription import write_output_files
 from app.correction import (
@@ -80,6 +84,7 @@ async def submit_transcribe(
     file: UploadFile = File(...),
     format: OutputFormat = Form(OutputFormat.lrc),
     no_separation: bool = Form(False),
+    demucs_model: str = Form(DEFAULT_DEMUCS_MODEL),
     whisper_model: str = Form("large-v3-turbo"),
     language: str | None = Form(None),
     artist: str | None = Form(None),
@@ -107,6 +112,7 @@ async def submit_transcribe(
         output_dir=job.output_dir,
         format=format.value,
         no_separation=no_separation,
+        demucs_model=demucs_model,
         whisper_model=whisper_model,
         language=language,
         artist=artist,
@@ -120,7 +126,10 @@ async def submit_transcribe(
 
 
 @app.post("/separate", response_model=JobResponse)
-async def submit_separate(file: UploadFile = File(...)):
+async def submit_separate(
+    file: UploadFile = File(...),
+    demucs_model: str = Form(DEFAULT_DEMUCS_MODEL),
+):
     if not file.filename:
         raise HTTPException(status_code=400, detail="File must have a filename")
 
@@ -132,11 +141,19 @@ async def submit_separate(file: UploadFile = File(...)):
 
     def task(progress_callback, warning_callback, **kwargs):
         progress_callback("Separating vocals...")
-        result_path = separate_vocals(kwargs["input_path"], kwargs["output_dir"])
+        result_path = separate_vocals(
+            kwargs["input_path"], kwargs["output_dir"], model_name=kwargs["demucs_model"]
+        )
         progress_callback("Complete")
         return [result_path]
 
-    job_manager.submit(job, task, input_path=input_path, output_dir=job.output_dir)
+    job_manager.submit(
+        job,
+        task,
+        input_path=input_path,
+        output_dir=job.output_dir,
+        demucs_model=demucs_model,
+    )
     return JobResponse(job_id=job.id)
 
 

@@ -2,7 +2,11 @@ import os
 import logging
 from typing import Callable
 
-from app.separation import separate_vocals, unload_model as unload_separation_model
+from app.separation import (
+    separate_vocals,
+    unload_model as unload_separation_model,
+    DEFAULT_DEMUCS_MODEL,
+)
 from app.transcription import write_output_files
 from app.transcription_engine import get_engine
 from app.correction import get_metadata_from_file, fetch_genius_lyrics, correct_transcription
@@ -15,6 +19,7 @@ def run_full_pipeline(
     output_dir: str,
     format: str = "lrc",
     no_separation: bool = False,
+    demucs_model: str = DEFAULT_DEMUCS_MODEL,
     whisper_model: str = "large-v3-turbo",
     language: str | None = None,
     artist: str | None = None,
@@ -36,7 +41,7 @@ def run_full_pipeline(
         report("Skipping vocal separation")
     else:
         report("Separating vocals...")
-        vocals_path = separate_vocals(input_path, output_dir)
+        vocals_path = separate_vocals(input_path, output_dir, model_name=demucs_model)
 
     # Free GPU memory from separation before loading Whisper
     if not no_separation:
