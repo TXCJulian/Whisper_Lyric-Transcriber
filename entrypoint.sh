@@ -27,4 +27,4 @@ for dev in /dev/dri/renderD* /dev/dri/card* /dev/kfd; do
     fi
 done
 
-exec gosu appuser "$@"
+exec setpriv --reuid="$PUID" --regid="$PGID" --init-groups "$@"

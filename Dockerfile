@@ -26,7 +26,6 @@ RUN if [ "$GPU_BACKEND" != "cpu" ]; then \
             ffmpeg \
             libsndfile1 \
             curl \
-            gosu \
         && rm -rf /var/lib/apt/lists/* \
         && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
         && ln -sf /usr/bin/python3.11 /usr/bin/python \
@@ -35,7 +34,6 @@ RUN if [ "$GPU_BACKEND" != "cpu" ]; then \
         apt-get update && apt-get install -y \
             ffmpeg \
             libsndfile1 \
-            gosu \
         && rm -rf /var/lib/apt/lists/*; \
     fi
 
