@@ -50,6 +50,11 @@ ENV TORCH_HOME=/app/models/torch
 ENV HF_HOME=/app/models/huggingface
 ENV PYTHONUNBUFFERED=1
 
+# torch's pip-installed oneAPI runtime libs (dist-packages/../../.. -> /usr/local/lib)
+# must resolve before the base image's own system oneAPI install, or symbol
+# versions can mismatch between the two copies despite matching sonames.
+ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
+
 # Non-root runtime user. IDs are assigned by the system (some base images
 # already occupy GID/UID 1000) and re-mapped to PUID/PGID at container start.
 RUN groupadd appgroup \
