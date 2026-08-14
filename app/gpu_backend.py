@@ -85,14 +85,65 @@ def get_device() -> torch.device:
 
 def get_device_name() -> str:
     """Return a human-readable GPU name."""
-    backend = get_backend()
-    if backend in ("cuda", "rocm"):
-        if torch.cuda.is_available():
-            return torch.cuda.get_device_name(0)
-    elif backend == "xpu":
-        if hasattr(torch, "xpu") and torch.xpu.is_available():
-            return torch.xpu.get_device_name(0)
+    device = get_device()
+    if device.type == "cuda" and torch.cuda.is_available():
+        return torch.cuda.get_device_name(0)
+    if device.type == "xpu" and hasattr(torch, "xpu") and torch.xpu.is_available():
+        return torch.xpu.get_device_name(0)
     return "CPU"
+
+
+def get_vram_info() -> dict[str, int] | None:
+    """Return total VRAM in MB for the active backend, or None (e.g. CPU, no GPU)."""
+    device = get_device()
+    try:
+        if device.type == "cuda" and torch.cuda.is_available():
+            _, total = torch.cuda.mem_get_info()
+        elif device.type == "xpu" and hasattr(torch, "xpu") and torch.xpu.is_available():
+            _, total = torch.xpu.mem_get_info()
+        else:
+            return None
+    except (RuntimeError, AttributeError):
+        return None
+    return {"total_mb": total // (1024 * 1024)}
+
+
+# Approximate VRAM requirements per OpenAI's published guidance (PyTorch
+# reference implementation, used for openai-whisper on XPU/ROCm):
+# https://github.com/openai/whisper#available-models-and-languages
+OPENAI_WHISPER_VRAM_MB = {
+    "tiny": 1000,
+    "base": 1000,
+    "small": 2000,
+    "medium": 5000,
+    "large-v2": 10000,
+    "large-v3": 10000,
+    "large-v3-turbo": 6000,
+}
+
+# faster-whisper (CTranslate2) runs noticeably leaner than the PyTorch
+# reference above -- its own published benchmark measures large-v2 at
+# 4525MB VRAM (fp16, beam_size=5): https://github.com/SYSTRAN/faster-whisper
+# These figures are extrapolated from that single measured data point plus
+# each model's parameter count, then rounded up for headroom.
+FASTER_WHISPER_VRAM_MB = {
+    "tiny": 1000,
+    "base": 1000,
+    "small": 1500,
+    "medium": 3000,
+    "large-v2": 5000,
+    "large-v3": 5000,
+    "large-v3-turbo": 3000,
+}
+
+
+def get_whisper_model_fit(vram: dict[str, int] | None) -> dict[str, bool] | None:
+    """Return which Whisper model sizes fit in the given VRAM info, or None if unconstrained (CPU)."""
+    if vram is None:
+        return None
+    total_mb = vram["total_mb"]
+    required_mb = FASTER_WHISPER_VRAM_MB if use_faster_whisper() else OPENAI_WHISPER_VRAM_MB
+    return {name: total_mb >= required for name, required in required_mb.items()}
 
 
 def is_nvidia() -> bool:
@@ -107,8 +158,8 @@ def use_faster_whisper() -> bool:
 
 def empty_cache():
     """Clear GPU memory cache for the active backend."""
-    backend = get_backend()
-    if backend in ("cuda", "rocm") and torch.cuda.is_available():
+    device = get_device()
+    if device.type == "cuda" and torch.cuda.is_available():
         torch.cuda.empty_cache()
-    elif backend == "xpu" and hasattr(torch, "xpu"):
+    elif device.type == "xpu" and hasattr(torch, "xpu"):
         torch.xpu.empty_cache()

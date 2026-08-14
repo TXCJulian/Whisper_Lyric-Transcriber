@@ -6,6 +6,10 @@ Automated song lyrics transcription service. Audio files are processed through v
 
 This project uses web scraping (via [`lyricsgenius`](https://github.com/johnwmillr/LyricsGenius)) to fetch lyrics from Genius for correction purposes. The Genius API does not provide lyrics directly — scraping their website to obtain them **violates the [Genius Terms of Service](https://genius.com/static/terms)**. By providing your own API key and running this service, you accept full responsibility for compliance with Genius's terms and applicable copyright laws. Lyrics are processed locally and are not stored or redistributed by this project.
 
+## Related Project
+
+This service is designed to run standalone and be consumed purely via its HTTP API — it has no UI of its own. [Media-Helper](https://github.com/TXCJulian/Media-Helper) is a reference consumer: a containerized media management tool (tv-show/music renaming, media cutting, downloading) whose **Lyrics Transcription** module proxies to this service and builds a full UI on top of it (job submission, real-time progress via SSE, GPU health/model-fit display). Media-Helper deliberately keeps this service external and optional — see its README's own "Related Projects" section — so deployments that don't need lyrics transcription never have to build or pull this GPU-capable image, and this service can run on whatever machine actually has the right hardware, pointed at via `TRANSCRIBER_URL`.
+
 ## Pipeline
 
 ```text
@@ -22,8 +26,8 @@ Each step is optional and can be run independently via separate endpoints.
 
 - Docker (recommended)
 - A supported GPU (optional, CPU fallback available):
-  - **NVIDIA** — NVIDIA Container Toolkit + CUDA GPU — **the only backend verified to work end-to-end**
-  - **Intel Arc** — Intel GPU with oneAPI/Level Zero drivers. Requires **Above 4G Decoding** and **Resizable BAR** enabled in the system BIOS/UEFI, or the GPU will not be usable by the container. ⚠️ **Untested** — the Docker image builds and the CI pipeline publishes it, but the pipeline has not been run against real Intel Arc hardware.
+  - **NVIDIA** — NVIDIA Container Toolkit + CUDA GPU — verified end-to-end on a **RTX 3060 Ti** on ***Ubuntu 26.04 Server*** running ***Kubernetes (k3s)***. This should also work on ***Windows 11*** via Docker Desktop, though that path is no longer part of end-to-end verification for newer releases of this project.
+  - **Intel Arc** — Intel GPU with oneAPI/Level Zero drivers. Requires **Above 4G Decoding** and **Resizable BAR** enabled in the system BIOS/UEFI, or the GPU will not be usable by the container. Verified end-to-end on an **Arc B580** (Battlemage) on ***Ubuntu 26.04 Desktop*** running ***Docker***. The image installs a current Level-Zero/compute-runtime driver from [Intel's official PPA](https://dgpu-docs.intel.com/installation-guides/installing-packages-from-the-intel-ppa.html) at build time, since the driver bundled in the oneAPI base image predates full Battlemage support.
   - **AMD Radeon** — ROCm-supported GPU. ⚠️ **Untested** — the Docker image builds and the CI pipeline publishes it, but the pipeline has not been run against real AMD hardware.
 - Genius API access token (for lyrics correction)
 
@@ -72,7 +76,7 @@ CI publishes prebuilt images to GitHub Container Registry on every push to `mast
 | Intel Arc | `ghcr.io/txcjulian/whisper-lyric-transcriber:latest-intel` |
 | AMD Radeon | `ghcr.io/txcjulian/whisper-lyric-transcriber:latest-amd` |
 
-Only the NVIDIA image is verified to work end-to-end — see [Requirements](#requirements) for the Intel/AMD caveats.
+NVIDIA and Intel images are verified end-to-end — see [Requirements](#requirements) for the AMD caveat.
 
 ### 3. Verify
 
@@ -81,7 +85,17 @@ curl http://localhost:3334/health
 ```
 
 ```json
-{"status": "ok", "gpu_backend": "cuda", "gpu_name": "NVIDIA GeForce RTX ...", "transcription_engine": "faster-whisper"}
+{
+  "status": "ok",
+  "gpu_backend": "cuda",
+  "gpu_name": "NVIDIA GeForce RTX ...",
+  "transcription_engine": "faster-whisper",
+  "vram_total_mb": 24564,
+  "whisper_model_fit": {
+    "tiny": true, "base": true, "small": true,
+    "medium": true, "large-v2": true, "large-v3": true, "large-v3-turbo": true
+  }
+}
 ```
 
 ## API Reference
@@ -92,7 +106,7 @@ All processing endpoints are asynchronous — they return a `job_id` immediately
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/health` | Service status, GPU backend, GPU name, transcription engine |
+| `GET` | `/health` | Service status, GPU backend/name, transcription engine, total VRAM, and per-model VRAM fit (`whisper_model_fit`) so callers can rule out model sizes too large for the GPU |
 
 ### Processing Endpoints
 
@@ -250,7 +264,7 @@ Optionally override auto-detection: `GPU_BACKEND=cpu uvicorn app.main:app --host
 ├── docker-compose.amd.yml      # AMD ROCm device passthrough
 ├── requirements.txt        # Shared Python dependencies
 ├── requirements-nvidia.txt # PyTorch CUDA wheels
-├── requirements-intel.txt  # PyTorch XPU + IPEX wheels
+├── requirements-intel.txt  # PyTorch XPU wheels
 ├── requirements-amd.txt    # PyTorch ROCm wheels
 ├── requirements-cpu.txt    # PyTorch CPU wheels
 ├── .env                    # Genius API token (not committed)
@@ -288,7 +302,7 @@ Artist and title for the Genius lookup are read from audio metadata tags (via mu
 | Speech-to-Text | faster-whisper (CUDA/CPU), OpenAI Whisper (XPU/ROCm) |
 | Lyrics Reference | Genius API (`lyricsgenius`) |
 | Audio Metadata | mutagen |
-| GPU Support | NVIDIA CUDA, Intel XPU (IPEX), AMD ROCm, CPU fallback |
+| GPU Support | NVIDIA CUDA, Intel XPU, AMD ROCm, CPU fallback |
 | Container Runtime | Docker, multi-stage build |
 
 ## License

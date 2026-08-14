@@ -29,12 +29,22 @@ from app.correction import (
     correct_transcription,
     get_metadata_from_file,
 )
-from app.gpu_backend import get_backend, get_device_name, use_faster_whisper
+from app.gpu_backend import (
+    get_backend,
+    get_device_name,
+    get_vram_info,
+    get_whisper_model_fit,
+    use_faster_whisper,
+)
 
 load_dotenv()
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s"
 )
+# Quiet the per-file HTTP request noise from model downloads (huggingface_hub
+# uses httpx; older releases used requests via urllib3) -- keep warnings/errors.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 job_manager = JobManager(max_workers=1)
@@ -68,11 +78,14 @@ app = FastAPI(title="Lyric Transcriber API", version="1.0.0", lifespan=lifespan)
 
 @app.get("/health")
 def health():
+    vram = get_vram_info()
     return {
         "status": "ok",
         "gpu_backend": get_backend(),
         "gpu_name": get_device_name(),
         "transcription_engine": "faster-whisper" if use_faster_whisper() else "openai-whisper",
+        "vram_total_mb": vram["total_mb"] if vram else None,
+        "whisper_model_fit": get_whisper_model_fit(vram),
     }
 
 
