@@ -108,9 +108,10 @@ def get_vram_info() -> dict[str, int] | None:
     return {"total_mb": total // (1024 * 1024)}
 
 
-# Approximate VRAM requirements per OpenAI's published guidance:
+# Approximate VRAM requirements per OpenAI's published guidance (PyTorch
+# reference implementation, used for openai-whisper on XPU/ROCm):
 # https://github.com/openai/whisper#available-models-and-languages
-WHISPER_MODEL_VRAM_MB = {
+OPENAI_WHISPER_VRAM_MB = {
     "tiny": 1000,
     "base": 1000,
     "small": 2000,
@@ -120,15 +121,29 @@ WHISPER_MODEL_VRAM_MB = {
     "large-v3-turbo": 6000,
 }
 
+# faster-whisper (CTranslate2) runs noticeably leaner than the PyTorch
+# reference above -- its own published benchmark measures large-v2 at
+# 4525MB VRAM (fp16, beam_size=5): https://github.com/SYSTRAN/faster-whisper
+# These figures are extrapolated from that single measured data point plus
+# each model's parameter count, then rounded up for headroom.
+FASTER_WHISPER_VRAM_MB = {
+    "tiny": 1000,
+    "base": 1000,
+    "small": 1500,
+    "medium": 3000,
+    "large-v2": 5000,
+    "large-v3": 5000,
+    "large-v3-turbo": 3000,
+}
+
 
 def get_whisper_model_fit(vram: dict[str, int] | None) -> dict[str, bool] | None:
     """Return which Whisper model sizes fit in the given VRAM info, or None if unconstrained (CPU)."""
     if vram is None:
         return None
     total_mb = vram["total_mb"]
-    return {
-        name: total_mb >= required for name, required in WHISPER_MODEL_VRAM_MB.items()
-    }
+    required_mb = FASTER_WHISPER_VRAM_MB if use_faster_whisper() else OPENAI_WHISPER_VRAM_MB
+    return {name: total_mb >= required for name, required in required_mb.items()}
 
 
 def is_nvidia() -> bool:
