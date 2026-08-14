@@ -15,10 +15,16 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV GPU_BACKEND=${GPU_BACKEND}
 
 # Install Python 3.11 + system deps (skip for cpu base which already has Python)
+#
+# Intel driver repo (see below) is added here too, before the python3 ->
+# 3.11 symlink swap: add-apt-repository's apt_pkg module is only built
+# for the base image's original Python, so calling it after the swap
+# fails with "ModuleNotFoundError: No module named 'apt_pkg'".
 RUN if [ "$GPU_BACKEND" != "cpu" ]; then \
         apt-get update && apt-get install -y \
             software-properties-common \
         && add-apt-repository ppa:deadsnakes/ppa \
+        && if [ "$GPU_BACKEND" = "intel" ]; then add-apt-repository -y ppa:kobuk-team/intel-graphics; fi \
         && apt-get update && apt-get install -y \
             python3.11 \
             python3.11-venv \
@@ -40,11 +46,10 @@ RUN if [ "$GPU_BACKEND" != "cpu" ]; then \
 # Intel: oneapi-basekit bundles an older Level-Zero/compute-runtime
 # (1.6.x) that crashes encoding GPU commands on Battlemage (Arc B580) --
 # "Abort was called ... command_encoder_xehp_and_later.inl". Install the
-# current driver from Intel's official PPA per
+# current driver from Intel's official PPA (repo added above) per
 # https://dgpu-docs.intel.com/installation-guides/installing-packages-from-the-intel-ppa.html
 RUN if [ "$GPU_BACKEND" = "intel" ]; then \
-        add-apt-repository -y ppa:kobuk-team/intel-graphics \
-        && apt-get update && apt-get install -y \
+        apt-get update && apt-get install -y \
             libze-intel-gpu1 \
             libze1 \
             intel-opencl-icd \
