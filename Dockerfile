@@ -88,7 +88,15 @@ ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
 
 # Non-root runtime user. IDs are assigned by the system (some base images
 # already occupy GID/UID 1000) and re-mapped to PUID/PGID at container start.
-RUN groupadd appgroup \
+#
+# Some base images (e.g. Ubuntu 24.04) ship a default "ubuntu" user at
+# UID/GID 1000. entrypoint.sh force-remaps appuser onto PUID/PGID (1000
+# by default) via `usermod -o`, which would otherwise collide with that
+# account -- setpriv --init-groups then resolves the shared UID back to
+# "ubuntu" and loads its groups instead of appuser's, silently dropping
+# GPU device group membership. Remove it so PUID=1000 stays unambiguous.
+RUN userdel -r ubuntu 2>/dev/null; \
+    groupadd appgroup \
     && useradd -g appgroup -M -s /bin/false appuser \
     && mkdir -p /app/models /app/jobs \
     && chown -R appuser:appgroup /app \
