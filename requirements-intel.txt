@@ -1,6 +1,6 @@
 --index-url https://download.pytorch.org/whl/xpu
 --extra-index-url https://pypi.org/simple
-torch==2.13.0
+torch==2.12.1+cu130
 torchaudio==2.11.0
 openai-whisper==20250625
 -r requirements.txt
