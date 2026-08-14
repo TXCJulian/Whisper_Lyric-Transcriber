@@ -85,27 +85,25 @@ def get_device() -> torch.device:
 
 def get_device_name() -> str:
     """Return a human-readable GPU name."""
-    backend = get_backend()
-    if backend in ("cuda", "rocm"):
-        if torch.cuda.is_available():
-            return torch.cuda.get_device_name(0)
-    elif backend == "xpu":
-        if hasattr(torch, "xpu") and torch.xpu.is_available():
-            return torch.xpu.get_device_name(0)
+    device = get_device()
+    if device.type == "cuda" and torch.cuda.is_available():
+        return torch.cuda.get_device_name(0)
+    if device.type == "xpu" and hasattr(torch, "xpu") and torch.xpu.is_available():
+        return torch.xpu.get_device_name(0)
     return "CPU"
 
 
 def get_vram_info() -> dict[str, int] | None:
     """Return total VRAM in MB for the active backend, or None (e.g. CPU, no GPU)."""
-    backend = get_backend()
+    device = get_device()
     try:
-        if backend in ("cuda", "rocm") and torch.cuda.is_available():
+        if device.type == "cuda" and torch.cuda.is_available():
             _, total = torch.cuda.mem_get_info()
-        elif backend == "xpu" and hasattr(torch, "xpu") and torch.xpu.is_available():
+        elif device.type == "xpu" and hasattr(torch, "xpu") and torch.xpu.is_available():
             _, total = torch.xpu.mem_get_info()
         else:
             return None
-    except RuntimeError:
+    except (RuntimeError, AttributeError):
         return None
     return {"total_mb": total // (1024 * 1024)}
 
@@ -123,9 +121,8 @@ WHISPER_MODEL_VRAM_MB = {
 }
 
 
-def get_whisper_model_fit() -> dict[str, bool] | None:
-    """Return which Whisper model sizes fit in VRAM, or None if unconstrained (CPU)."""
-    vram = get_vram_info()
+def get_whisper_model_fit(vram: dict[str, int] | None) -> dict[str, bool] | None:
+    """Return which Whisper model sizes fit in the given VRAM info, or None if unconstrained (CPU)."""
     if vram is None:
         return None
     total_mb = vram["total_mb"]
@@ -146,8 +143,8 @@ def use_faster_whisper() -> bool:
 
 def empty_cache():
     """Clear GPU memory cache for the active backend."""
-    backend = get_backend()
-    if backend in ("cuda", "rocm") and torch.cuda.is_available():
+    device = get_device()
+    if device.type == "cuda" and torch.cuda.is_available():
         torch.cuda.empty_cache()
-    elif backend == "xpu" and hasattr(torch, "xpu"):
+    elif device.type == "xpu" and hasattr(torch, "xpu"):
         torch.xpu.empty_cache()

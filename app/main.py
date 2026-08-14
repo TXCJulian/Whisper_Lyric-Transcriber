@@ -85,7 +85,7 @@ def health():
         "gpu_name": get_device_name(),
         "transcription_engine": "faster-whisper" if use_faster_whisper() else "openai-whisper",
         "vram_total_mb": vram["total_mb"] if vram else None,
-        "whisper_model_fit": get_whisper_model_fit(),
+        "whisper_model_fit": get_whisper_model_fit(vram),
     }
 
 
