@@ -48,6 +48,7 @@ COPY entrypoint.sh /entrypoint.sh
 
 ENV TORCH_HOME=/app/models/torch
 ENV HF_HOME=/app/models/huggingface
+ENV XDG_CACHE_HOME=/app/models/whisper
 ENV PYTHONUNBUFFERED=1
 
 # torch's pip-installed oneAPI runtime libs (dist-packages/../../.. -> /usr/local/lib)
