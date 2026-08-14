@@ -37,6 +37,22 @@ RUN if [ "$GPU_BACKEND" != "cpu" ]; then \
         && rm -rf /var/lib/apt/lists/*; \
     fi
 
+# Intel: oneapi-basekit bundles an older Level-Zero/compute-runtime
+# (1.6.x) that crashes encoding GPU commands on Battlemage (Arc B580) --
+# "Abort was called ... command_encoder_xehp_and_later.inl". Install the
+# current driver from Intel's official PPA per
+# https://dgpu-docs.intel.com/installation-guides/installing-packages-from-the-intel-ppa.html
+RUN if [ "$GPU_BACKEND" = "intel" ]; then \
+        add-apt-repository -y ppa:kobuk-team/intel-graphics \
+        && apt-get update && apt-get install -y \
+            libze-intel-gpu1 \
+            libze1 \
+            intel-opencl-icd \
+            intel-metrics-discovery \
+            intel-gsc \
+        && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 WORKDIR /app
 
 # Install backend-specific requirements
