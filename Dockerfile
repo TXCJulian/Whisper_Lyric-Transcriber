@@ -76,6 +76,11 @@ ENV HF_HOME=/app/models/huggingface
 ENV XDG_CACHE_HOME=/app/models/whisper
 ENV PYTHONUNBUFFERED=1
 
+# Level-Zero's sysman subsystem, which torch.xpu uses for device
+# enumeration, is disabled by default -- without this, torch.xpu sees
+# zero devices and gpu_backend.py silently falls back to CPU.
+ENV ZES_ENABLE_SYSMAN=1
+
 # torch's pip-installed oneAPI runtime libs (dist-packages/../../.. -> /usr/local/lib)
 # must resolve before the base image's own system oneAPI install, or symbol
 # versions can mismatch between the two copies despite matching sonames.
