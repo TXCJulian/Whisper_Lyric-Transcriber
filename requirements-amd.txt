@@ -2,7 +2,7 @@
 --extra-index-url https://pypi.org/simple
 # rocm6.4's index tops out at 2.9.x -- newer torch/torchaudio aren't
 # published there yet, unlike the cu130/xpu indices.
-torch==2.12.1+cu130
+torch==2.9.1
 torchaudio==2.9.1
 openai-whisper==20250625
 -r requirements.txt
