@@ -95,6 +95,45 @@ def get_device_name() -> str:
     return "CPU"
 
 
+def get_vram_info() -> dict[str, int] | None:
+    """Return total VRAM in MB for the active backend, or None (e.g. CPU, no GPU)."""
+    backend = get_backend()
+    try:
+        if backend in ("cuda", "rocm") and torch.cuda.is_available():
+            _, total = torch.cuda.mem_get_info()
+        elif backend == "xpu" and hasattr(torch, "xpu") and torch.xpu.is_available():
+            _, total = torch.xpu.mem_get_info()
+        else:
+            return None
+    except RuntimeError:
+        return None
+    return {"total_mb": total // (1024 * 1024)}
+
+
+# Approximate VRAM requirements per OpenAI's published guidance:
+# https://github.com/openai/whisper#available-models-and-languages
+WHISPER_MODEL_VRAM_MB = {
+    "tiny": 1000,
+    "base": 1000,
+    "small": 2000,
+    "medium": 5000,
+    "large-v2": 10000,
+    "large-v3": 10000,
+    "large-v3-turbo": 6000,
+}
+
+
+def get_whisper_model_fit() -> dict[str, bool] | None:
+    """Return which Whisper model sizes fit in VRAM, or None if unconstrained (CPU)."""
+    vram = get_vram_info()
+    if vram is None:
+        return None
+    total_mb = vram["total_mb"]
+    return {
+        name: total_mb >= required for name, required in WHISPER_MODEL_VRAM_MB.items()
+    }
+
+
 def is_nvidia() -> bool:
     """Check if the active backend is NVIDIA CUDA (not ROCm/HIP)."""
     return get_backend() == "cuda"

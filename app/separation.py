@@ -68,6 +68,7 @@ def separate_vocals(
     input_path: str, output_dir: str, model_name: str = DEFAULT_DEMUCS_MODEL
 ) -> str:
     """Separate vocals from audio. Returns path to vocals WAV file."""
+    logger.info(f"Separating vocals: {input_path} (model '{model_name}')")
     model, device, target_sr = load_model(model_name)
     assert target_sr is not None, "Model sample rate not initialized"
 

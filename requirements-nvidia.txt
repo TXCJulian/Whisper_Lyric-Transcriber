@@ -1,5 +1,5 @@
 --index-url https://download.pytorch.org/whl/cu130
 --extra-index-url https://pypi.org/simple
-torch
-torchaudio
+torch==2.13.0
+torchaudio==2.11.0
 -r requirements.txt

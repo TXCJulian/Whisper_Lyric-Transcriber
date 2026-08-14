@@ -4,11 +4,22 @@ import threading
 from abc import ABC, abstractmethod
 from typing import Any, Callable
 
+import numpy as np
+
 from app.transcription import Segment, WordTiming
 
 logger = logging.getLogger(__name__)
 
 IDLE_UNLOAD_SECONDS = float(os.getenv("WHISPER_IDLE_UNLOAD_SECONDS", "15"))
+
+# VAD's default min_silence_duration_ms (2000ms) treats any gap shorter than
+# that as still "one continuous speech region", so short instrumental pauses
+# between lyric lines never get trimmed out -- Whisper then decodes straight
+# across the raw silence and its own timestamp placement there is imprecise,
+# often landing on the next line well before it's actually sung. Lowering
+# the threshold makes VAD split those pauses out too, so the word timestamp
+# anchors to the real, VAD-detected speech onset instead.
+VAD_MIN_SILENCE_MS = 500
 
 
 class TranscriptionEngine(ABC):
@@ -137,6 +148,7 @@ class FasterWhisperEngine(TranscriptionEngine):
         kwargs: dict[str, Any] = {
             "word_timestamps": True,
             "vad_filter": True,
+            "vad_parameters": {"min_silence_duration_ms": VAD_MIN_SILENCE_MS},
             "condition_on_previous_text": False,
         }
         if language:
@@ -193,12 +205,6 @@ class FasterWhisperEngine(TranscriptionEngine):
 class OpenAIWhisperEngine(TranscriptionEngine):
     """Transcription engine using OpenAI Whisper (PyTorch). For XPU and ROCm."""
 
-    # faster-whisper model names that don't exist in OpenAI Whisper
-    _MODEL_MAP: dict[str, str] = {
-        "large-v3-turbo": "large-v3",
-        "turbo": "large-v3",
-    }
-
     def __init__(self):
         super().__init__()
         from app.gpu_backend import get_device
@@ -206,25 +212,15 @@ class OpenAIWhisperEngine(TranscriptionEngine):
         self._model = None
         self._model_size: str | None = None
 
-    def _resolve_model_name(self, model_size: str) -> str:
-        """Map faster-whisper model names to OpenAI Whisper equivalents."""
-        resolved = self._MODEL_MAP.get(model_size, model_size)
-        if resolved != model_size:
-            logger.info(
-                f"[openai-whisper] Mapped model '{model_size}' -> '{resolved}'"
-            )
-        return resolved
-
     def _get_model(self, model_size: str):
-        resolved = self._resolve_model_name(model_size)
-        if self._model is None or self._model_size != resolved:
+        if self._model is None or self._model_size != model_size:
             import whisper
 
             logger.info(
-                f"[openai-whisper] Loading '{resolved}' on {self._device}"
+                f"[openai-whisper] Loading '{model_size}' on {self._device}"
             )
-            self._model = whisper.load_model(resolved, device=self._device)
-            self._model_size = resolved
+            self._model = whisper.load_model(model_size, device=self._device)
+            self._model_size = model_size
         return self._model
 
     def _transcribe(
@@ -238,10 +234,43 @@ class OpenAIWhisperEngine(TranscriptionEngine):
     ) -> tuple[list[Segment], str]:
         model = self._get_model(model_size)
         import whisper
+        from faster_whisper.vad import (
+            SpeechTimestampsMap,
+            VadOptions,
+            collect_chunks,
+            get_speech_timestamps,
+        )
+
+        # openai-whisper has no built-in VAD (unlike faster-whisper's
+        # vad_filter=True), so without this it hallucinates lyrics over
+        # instrumental/silent stretches. faster-whisper is a dependency on
+        # every backend, so we reuse its bundled Silero VAD here and remap
+        # the resulting timestamps back to the original audio afterwards,
+        # the same way faster-whisper does internally.
+        sampling_rate = whisper.audio.SAMPLE_RATE
+        audio = whisper.load_audio(audio_path)
+        vad_options = VadOptions(min_silence_duration_ms=VAD_MIN_SILENCE_MS)
+        speech_chunks = get_speech_timestamps(
+            audio, vad_options, sampling_rate=sampling_rate
+        )
+        ts_map = None
+        if speech_chunks:
+            audio_chunks, _ = collect_chunks(
+                audio, speech_chunks, sampling_rate=sampling_rate
+            )
+            audio = (
+                audio_chunks[0] if len(audio_chunks) == 1 else np.concatenate(audio_chunks)
+            )
+            ts_map = SpeechTimestampsMap(speech_chunks, sampling_rate)
+        else:
+            logger.warning("VAD detected no speech; transcribing full audio")
 
         kwargs: dict[str, Any] = {
             "word_timestamps": True,
             "condition_on_previous_text": False,
+            # faster-whisper's default; openai-whisper's own default (None)
+            # falls back to greedy decoding instead of beam search.
+            "beam_size": 5,
         }
         if language:
             kwargs["language"] = language
@@ -257,7 +286,7 @@ class OpenAIWhisperEngine(TranscriptionEngine):
             kwargs["initial_prompt"] = initial_prompt
             logger.info(f"Using initial_prompt: '{initial_prompt}'")
 
-        result = whisper.transcribe(model, audio_path, **kwargs)
+        result = whisper.transcribe(model, audio, **kwargs)
         detected_language = result.get("language", "unknown")
         logger.info(f"Detected language: {detected_language}")
 
@@ -266,17 +295,26 @@ class OpenAIWhisperEngine(TranscriptionEngine):
 
         segments = []
         for seg in result.get("segments", []):
-            words = []
-            for w in seg.get("words", []):
-                words.append(
-                    WordTiming(start=w["start"], end=w["end"], word=w["word"])
-                )
+            words = [
+                WordTiming(start=w["start"], end=w["end"], word=w["word"])
+                for w in seg.get("words", [])
+            ]
+
+            if ts_map is not None and words:
+                for word in words:
+                    chunk_index = ts_map.get_chunk_index((word.start + word.end) / 2)
+                    word.start = ts_map.get_original_time(word.start, chunk_index)
+                    word.end = ts_map.get_original_time(word.end, chunk_index)
+                seg_start, seg_end = words[0].start, words[-1].end
+            elif ts_map is not None:
+                seg_start = ts_map.get_original_time(seg["start"])
+                seg_end = ts_map.get_original_time(seg["end"], is_end=True)
+            else:
+                seg_start, seg_end = seg["start"], seg["end"]
+
             segments.append(
                 Segment(
-                    start=seg["start"],
-                    end=seg["end"],
-                    text=seg["text"].strip(),
-                    words=words,
+                    start=seg_start, end=seg_end, text=seg["text"].strip(), words=words
                 )
             )
 

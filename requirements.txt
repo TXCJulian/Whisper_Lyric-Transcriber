@@ -1,9 +1,13 @@
-soundfile
-demucs
-faster-whisper
-lyricsgenius>=3.0.0
-mutagen
-fastapi[standard]
-uvicorn[standard]
-python-dotenv
-python-multipart
+soundfile==0.14.0
+demucs==4.1.0
+# transcription_engine.py's OpenAIWhisperEngine reaches into
+# faster_whisper.vad (SpeechTimestampsMap, collect_chunks,
+# get_speech_timestamps) for VAD filtering; pinned to the version this was
+# verified against, since that's undocumented/internal API.
+faster-whisper==1.2.1
+lyricsgenius==3.12.2
+mutagen==1.48.1
+fastapi[standard]==0.141.1
+uvicorn[standard]==0.52.3
+python-dotenv==1.2.2
+python-multipart==0.0.32
