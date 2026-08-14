@@ -2,7 +2,7 @@ ARG GPU_BACKEND=nvidia
 
 # ── Base images per backend ────────────────────────────────────────────────
 FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04 AS base-nvidia
-FROM intel/oneapi-basekit:2025.3.1-0-devel-ubuntu22.04 AS base-intel
+FROM intel/oneapi-basekit:2025.3.1-0-devel-ubuntu24.04 AS base-intel
 FROM rocm/rocm-terminal:6.4 AS base-amd
 FROM python:3.11-slim AS base-cpu
 
@@ -48,6 +48,10 @@ RUN if [ "$GPU_BACKEND" != "cpu" ]; then \
 # "Abort was called ... command_encoder_xehp_and_later.inl". Install the
 # current driver from Intel's official PPA (repo added above) per
 # https://dgpu-docs.intel.com/installation-guides/installing-packages-from-the-intel-ppa.html
+# Requires the ubuntu24.04 base image above: this PPA has no jammy (22.04)
+# build, and Intel's own repositories.intel.com jammy repo (already
+# configured in the base image) tops out at driver 24.39, still too old
+# for B580. The PPA's noble build matches the host's driver version exactly.
 RUN if [ "$GPU_BACKEND" = "intel" ]; then \
         apt-get update && apt-get install -y \
             libze-intel-gpu1 \
