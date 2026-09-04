@@ -19,3 +19,4 @@ Thumbs.db
 CLAUDE.md
 
 .playwright-mcp/
+docker-compose.nvidia-legacy.deploy.yml
