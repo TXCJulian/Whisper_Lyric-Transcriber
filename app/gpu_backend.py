@@ -152,8 +152,21 @@ def is_nvidia() -> bool:
 
 
 def _is_legacy_nvidia() -> bool:
-    """Check if GPU_BACKEND explicitly requested the legacy NVIDIA build."""
-    return os.getenv("GPU_BACKEND", "").lower().strip() == "nvidia-legacy"
+    """Check if this is the legacy NVIDIA build (Maxwell/Pascal/Volta).
+
+    Prefers GPU_BACKEND_BUILD, which the Docker image bakes in at build
+    time and never changes at runtime. GPU_BACKEND itself isn't safe for
+    this check: compose files also set it as a runtime override (e.g. to
+    force cpu), so a prebuilt nvidia image started with GPU_BACKEND=
+    nvidia-legacy would otherwise route to OpenAIWhisperEngine despite
+    never having installed openai-whisper, and a prebuilt nvidia-legacy
+    image reset to GPU_BACKEND=nvidia would route to FasterWhisperEngine
+    despite CTranslate2 lacking kernels for the GPU. GPU_BACKEND_BUILD is
+    absent outside Docker, so local (non-container) runs still key off
+    GPU_BACKEND directly.
+    """
+    value = os.getenv("GPU_BACKEND_BUILD") or os.getenv("GPU_BACKEND", "")
+    return value.lower().strip() == "nvidia-legacy"
 
 
 def use_faster_whisper() -> bool:

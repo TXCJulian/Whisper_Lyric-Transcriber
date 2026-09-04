@@ -17,6 +17,12 @@ ARG GPU_BACKEND=nvidia
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
 ENV GPU_BACKEND=${GPU_BACKEND}
+# Immutable record of what this image was actually built/installed for --
+# unlike GPU_BACKEND above, compose files also set GPU_BACKEND as a runtime
+# override (e.g. to force cpu), which would otherwise let a runtime value
+# silently pick an engine whose packages this image never installed (see
+# app/gpu_backend.py's use_faster_whisper()).
+ENV GPU_BACKEND_BUILD=${GPU_BACKEND}
 
 # Install Python 3.11 + system deps (skip for cpu base which already has Python)
 #
@@ -78,6 +84,11 @@ COPY entrypoint.sh /entrypoint.sh
 ENV TORCH_HOME=/app/models/torch
 ENV HF_HOME=/app/models/huggingface
 ENV XDG_CACHE_HOME=/app/models/whisper
+# openai-whisper's CUDA median-filter kernel (used for word-alignment) is
+# JIT-compiled via Triton, which defaults its cache to ~/.triton -- HOME
+# still points at /root (root's own env, untouched by entrypoint.sh's
+# setpriv) when appuser actually runs the process, so that write fails.
+ENV TRITON_CACHE_DIR=/app/models/triton
 ENV PYTHONUNBUFFERED=1
 
 # Level-Zero's sysman subsystem, which torch.xpu uses for device
