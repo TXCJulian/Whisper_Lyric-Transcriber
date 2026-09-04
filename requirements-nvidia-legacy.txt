@@ -1,0 +1,14 @@
+# Legacy NVIDIA GPU support (Maxwell/Pascal/Volta, e.g. Quadro M4000) --
+# CTranslate2 (faster-whisper's backend) dropped Maxwell/sm_5x kernels
+# from its prebuilt wheels starting with its CUDA 12 migration in v4.0,
+# and PyTorch's own official wheels dropped Maxwell/Pascal starting with
+# the cu128 builds of 2.8.0. torch 2.7.0's cu126 wheels are the newest
+# still shipping sm_50/sm_52 kernels, and this backend uses openai-whisper
+# (plain PyTorch, no CTranslate2) instead of faster-whisper -- see
+# app/gpu_backend.py's use_faster_whisper().
+--index-url https://download.pytorch.org/whl/cu126
+--extra-index-url https://pypi.org/simple
+torch==2.7.0
+torchaudio==2.7.0
+openai-whisper==20250625
+-r requirements.txt

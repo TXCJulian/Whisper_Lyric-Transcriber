@@ -41,7 +41,7 @@ def _resolve_backend() -> str:
     """Resolve backend from env var override or auto-detection."""
     override = os.getenv("GPU_BACKEND", "").lower().strip()
     # Accept Docker build-arg names as aliases
-    _aliases = {"nvidia": "cuda", "intel": "xpu", "amd": "rocm"}
+    _aliases = {"nvidia": "cuda", "nvidia-legacy": "cuda", "intel": "xpu", "amd": "rocm"}
     override = _aliases.get(override, override)
     valid = ("cuda", "xpu", "rocm", "cpu")
     if override in valid:
@@ -151,9 +151,22 @@ def is_nvidia() -> bool:
     return get_backend() == "cuda"
 
 
+def _is_legacy_nvidia() -> bool:
+    """Check if GPU_BACKEND explicitly requested the legacy NVIDIA build."""
+    return os.getenv("GPU_BACKEND", "").lower().strip() == "nvidia-legacy"
+
+
 def use_faster_whisper() -> bool:
-    """Check if faster-whisper should be used (CUDA or CPU)."""
-    return get_backend() in ("cuda", "cpu")
+    """Check if faster-whisper should be used (CUDA or CPU).
+
+    Excludes legacy NVIDIA GPUs (Maxwell/Pascal/Volta): CTranslate2's
+    prebuilt wheels dropped those architectures' kernels in its CUDA 12
+    migration, so nvidia-legacy uses the OpenAI Whisper engine instead.
+    """
+    backend = get_backend()
+    if backend == "cuda" and _is_legacy_nvidia():
+        return False
+    return backend in ("cuda", "cpu")
 
 
 def empty_cache():

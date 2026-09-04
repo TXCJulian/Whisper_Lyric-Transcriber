@@ -2,6 +2,10 @@ ARG GPU_BACKEND=nvidia
 
 # ── Base images per backend ────────────────────────────────────────────────
 FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04 AS base-nvidia
+# Same base image as base-nvidia -- requirements-nvidia-legacy.txt pins
+# older cu126 torch wheels (still shipping Maxwell/sm_5x kernels) rather
+# than needing a different system CUDA install.
+FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04 AS base-nvidia-legacy
 FROM intel/oneapi-basekit:2025.3.1-0-devel-ubuntu24.04 AS base-intel
 FROM rocm/rocm-terminal:6.4 AS base-amd
 FROM python:3.11-slim AS base-cpu
