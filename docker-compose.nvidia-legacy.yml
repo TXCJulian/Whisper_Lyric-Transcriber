@@ -1,0 +1,16 @@
+# Legacy NVIDIA GPU override (Maxwell/Pascal/Volta, e.g. Quadro M4000) --
+# used explicitly: GPU_BACKEND=nvidia-legacy docker compose -f docker-compose.yml -f docker-compose.nvidia-legacy.yml up --build
+# Device reservation is identical to docker-compose.nvidia.yml; this file
+# exists so the legacy backend has its own explicit invocation, matching
+# the intel/amd pattern. The default docker-compose.override.yml already
+# reserves an NVIDIA GPU generically, so `GPU_BACKEND=nvidia-legacy docker
+# compose up --build` also works without passing this file.
+services:
+  lyric-transcriber:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

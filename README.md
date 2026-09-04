@@ -27,6 +27,7 @@ Each step is optional and can be run independently via separate endpoints.
 - Docker (recommended)
 - A supported GPU (optional, CPU fallback available):
   - **NVIDIA** — NVIDIA Container Toolkit + CUDA GPU — verified end-to-end on a **RTX 3060 Ti** on ***Ubuntu 26.04 Server*** running ***Kubernetes (k3s)***. This should also work on ***Windows 11*** via Docker Desktop, though that path is no longer part of end-to-end verification for newer releases of this project.
+  - **NVIDIA legacy** (`GPU_BACKEND=nvidia-legacy`) — Maxwell/Pascal/Volta cards (e.g. **Quadro M4000**) that the standard NVIDIA image's newer wheels no longer ship kernels for. Verified end-to-end on a **Quadro M4000**. Uses the OpenAI Whisper engine (faster-whisper's CTranslate2 backend also dropped these architectures); Triton JIT kernels aren't supported on Maxwell either, so word-alignment falls back to whisper's slower pure-PyTorch implementation — expect noticeably longer transcription times than the standard NVIDIA backend.
   - **Intel Arc** — Intel GPU with oneAPI/Level Zero drivers. Requires **Above 4G Decoding** and **Resizable BAR** enabled in the system BIOS/UEFI, or the GPU will not be usable by the container. Verified end-to-end on an **Arc B580** (Battlemage) on ***Ubuntu 26.04 Desktop*** running ***Docker***. The image installs a current Level-Zero/compute-runtime driver from [Intel's official PPA](https://dgpu-docs.intel.com/installation-guides/installing-packages-from-the-intel-ppa.html) at build time, since the driver bundled in the oneAPI base image predates full Battlemage support.
   - **AMD Radeon** — ROCm-supported GPU. ⚠️ **Untested** — the Docker image builds and the CI pipeline publishes it, but the pipeline has not been run against real AMD hardware.
 - Genius API access token (for lyrics correction)
@@ -54,6 +55,9 @@ Each step is optional and can be run independently via separate endpoints.
 # NVIDIA (default — docker-compose.override.yml auto-loads GPU reservation)
 docker compose up -d
 
+# NVIDIA legacy (Maxwell/Pascal/Volta, e.g. Quadro M4000)
+GPU_BACKEND=nvidia-legacy docker compose -f docker-compose.yml -f docker-compose.nvidia-legacy.yml up -d --build
+
 # Intel Arc
 GPU_BACKEND=intel docker compose -f docker-compose.yml -f docker-compose.intel.yml up -d --build
 
@@ -73,10 +77,11 @@ CI publishes prebuilt images to GitHub Container Registry on every push to `mast
 | Backend | Image |
 | --- | --- |
 | NVIDIA | `ghcr.io/txcjulian/whisper-lyric-transcriber:latest-nvidia` |
+| NVIDIA legacy | `ghcr.io/txcjulian/whisper-lyric-transcriber:latest-nvidia-legacy` |
 | Intel Arc | `ghcr.io/txcjulian/whisper-lyric-transcriber:latest-intel` |
 | AMD Radeon | `ghcr.io/txcjulian/whisper-lyric-transcriber:latest-amd` |
 
-NVIDIA and Intel images are verified end-to-end — see [Requirements](#requirements) for the AMD caveat.
+NVIDIA, NVIDIA legacy, and Intel images are verified end-to-end — see [Requirements](#requirements) for the AMD caveat.
 
 ### 3. Verify
 
@@ -209,7 +214,7 @@ Da kann man nichts machen
 | `DEMUCS_MODEL` | `htdemucs` | Demucs model name for vocal separation (e.g. `htdemucs` for faster/lower-latency single-pass separation) |
 | `DEMUCS_SEGMENT_SECONDS` | model default | Override the chunk length `apply_model()` uses to split long tracks; lower it if you hit GPU OOM on very long tracks |
 | `JOBS_DIR` | `/app/jobs` | Base directory for job input/output files |
-| `GPU_BACKEND` | auto-detect | Override GPU detection: `cuda`/`nvidia`, `xpu`/`intel`, `rocm`/`amd`, or `cpu` |
+| `GPU_BACKEND` | auto-detect | Override GPU detection: `cuda`/`nvidia`, `nvidia-legacy` (Maxwell/Pascal/Volta), `xpu`/`intel`, `rocm`/`amd`, or `cpu` |
 | `PUID` | `1000` | UID the container process runs as (container runs as a non-root `appuser`) |
 | `PGID` | `1000` | GID the container process runs as |
 
@@ -227,6 +232,7 @@ The base `docker-compose.yml` contains no GPU reservation. Per-backend override 
 | Backend | Compose command |
 | --- | --- |
 | NVIDIA | `docker compose up` (override auto-loaded) |
+| NVIDIA legacy | `GPU_BACKEND=nvidia-legacy docker compose -f docker-compose.yml -f docker-compose.nvidia-legacy.yml up --build` |
 | Intel | `GPU_BACKEND=intel docker compose -f docker-compose.yml -f docker-compose.intel.yml up --build` |
 | AMD | `GPU_BACKEND=amd docker compose -f docker-compose.yml -f docker-compose.amd.yml up --build` |
 | CPU | `GPU_BACKEND=cpu docker compose -f docker-compose.yml up --build` |
@@ -239,10 +245,11 @@ python -m venv .venv
 # source .venv/bin/activate  # Linux/macOS
 
 # Install for your GPU:
-pip install -r requirements-nvidia.txt   # NVIDIA CUDA
-pip install -r requirements-intel.txt    # Intel Arc
-pip install -r requirements-amd.txt      # AMD Radeon
-pip install -r requirements-cpu.txt      # CPU only
+pip install -r requirements-nvidia.txt        # NVIDIA CUDA
+pip install -r requirements-nvidia-legacy.txt # NVIDIA Maxwell/Pascal/Volta
+pip install -r requirements-intel.txt         # Intel Arc
+pip install -r requirements-amd.txt           # AMD Radeon
+pip install -r requirements-cpu.txt           # CPU only
 ```
 
 Start the server:
@@ -260,10 +267,13 @@ Optionally override auto-detection: `GPU_BACKEND=cpu uvicorn app.main:app --host
 ├── docker-compose.yml      # Base service definition (no GPU config)
 ├── docker-compose.override.yml # NVIDIA GPU reservation (auto-loaded)
 ├── docker-compose.nvidia.yml   # NVIDIA GPU reservation (explicit)
+├── docker-compose.nvidia-legacy.yml # NVIDIA legacy (Maxwell/Pascal/Volta) GPU reservation
+├── docker-compose.nvidia-legacy.deploy.yml # Standalone: pulls prebuilt legacy image, no build
 ├── docker-compose.intel.yml    # Intel Arc device passthrough
 ├── docker-compose.amd.yml      # AMD ROCm device passthrough
 ├── requirements.txt        # Shared Python dependencies
 ├── requirements-nvidia.txt # PyTorch CUDA wheels
+├── requirements-nvidia-legacy.txt # PyTorch CUDA wheels (legacy, cu126) + openai-whisper
 ├── requirements-intel.txt  # PyTorch XPU wheels
 ├── requirements-amd.txt    # PyTorch ROCm wheels
 ├── requirements-cpu.txt    # PyTorch CPU wheels

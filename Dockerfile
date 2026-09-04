@@ -2,6 +2,10 @@ ARG GPU_BACKEND=nvidia
 
 # ── Base images per backend ────────────────────────────────────────────────
 FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04 AS base-nvidia
+# Same base image as base-nvidia -- requirements-nvidia-legacy.txt pins
+# older cu126 torch wheels (still shipping Maxwell/sm_5x kernels) rather
+# than needing a different system CUDA install.
+FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04 AS base-nvidia-legacy
 FROM intel/oneapi-basekit:2025.3.1-0-devel-ubuntu24.04 AS base-intel
 FROM rocm/rocm-terminal:6.4 AS base-amd
 FROM python:3.11-slim AS base-cpu
@@ -13,6 +17,12 @@ ARG GPU_BACKEND=nvidia
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
 ENV GPU_BACKEND=${GPU_BACKEND}
+# Immutable record of what this image was actually built/installed for --
+# unlike GPU_BACKEND above, compose files also set GPU_BACKEND as a runtime
+# override (e.g. to force cpu), which would otherwise let a runtime value
+# silently pick an engine whose packages this image never installed (see
+# app/gpu_backend.py's use_faster_whisper()).
+ENV GPU_BACKEND_BUILD=${GPU_BACKEND}
 
 # Install Python 3.11 + system deps (skip for cpu base which already has Python)
 #
@@ -74,6 +84,11 @@ COPY entrypoint.sh /entrypoint.sh
 ENV TORCH_HOME=/app/models/torch
 ENV HF_HOME=/app/models/huggingface
 ENV XDG_CACHE_HOME=/app/models/whisper
+# openai-whisper's CUDA median-filter kernel (used for word-alignment) is
+# JIT-compiled via Triton, which defaults its cache to ~/.triton -- HOME
+# still points at /root (root's own env, untouched by entrypoint.sh's
+# setpriv) when appuser actually runs the process, so that write fails.
+ENV TRITON_CACHE_DIR=/app/models/triton
 ENV PYTHONUNBUFFERED=1
 
 # Level-Zero's sysman subsystem, which torch.xpu uses for device

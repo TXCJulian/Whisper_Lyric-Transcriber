@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: [nvidia, intel, amd]
+        backend: [nvidia, nvidia-legacy, intel, amd]
 
     steps:
       - name: Checkout repository
