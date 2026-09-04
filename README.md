@@ -27,7 +27,7 @@ Each step is optional and can be run independently via separate endpoints.
 - Docker (recommended)
 - A supported GPU (optional, CPU fallback available):
   - **NVIDIA** — NVIDIA Container Toolkit + CUDA GPU — verified end-to-end on a **RTX 3060 Ti** on ***Ubuntu 26.04 Server*** running ***Kubernetes (k3s)***. This should also work on ***Windows 11*** via Docker Desktop, though that path is no longer part of end-to-end verification for newer releases of this project.
-  - **NVIDIA legacy** (`GPU_BACKEND=nvidia-legacy`) — Maxwell/Pascal/Volta cards (e.g. **Quadro M4000**) that the standard NVIDIA image's newer wheels no longer ship kernels for. In testing on a Quadro M4000.
+  - **NVIDIA legacy** (`GPU_BACKEND=nvidia-legacy`) — Maxwell/Pascal/Volta cards (e.g. **Quadro M4000**) that the standard NVIDIA image's newer wheels no longer ship kernels for. Verified end-to-end on a **Quadro M4000**. Uses the OpenAI Whisper engine (faster-whisper's CTranslate2 backend also dropped these architectures); Triton JIT kernels aren't supported on Maxwell either, so word-alignment falls back to whisper's slower pure-PyTorch implementation — expect noticeably longer transcription times than the standard NVIDIA backend.
   - **Intel Arc** — Intel GPU with oneAPI/Level Zero drivers. Requires **Above 4G Decoding** and **Resizable BAR** enabled in the system BIOS/UEFI, or the GPU will not be usable by the container. Verified end-to-end on an **Arc B580** (Battlemage) on ***Ubuntu 26.04 Desktop*** running ***Docker***. The image installs a current Level-Zero/compute-runtime driver from [Intel's official PPA](https://dgpu-docs.intel.com/installation-guides/installing-packages-from-the-intel-ppa.html) at build time, since the driver bundled in the oneAPI base image predates full Battlemage support.
   - **AMD Radeon** — ROCm-supported GPU. ⚠️ **Untested** — the Docker image builds and the CI pipeline publishes it, but the pipeline has not been run against real AMD hardware.
 - Genius API access token (for lyrics correction)
@@ -81,7 +81,7 @@ CI publishes prebuilt images to GitHub Container Registry on every push to `mast
 | Intel Arc | `ghcr.io/txcjulian/whisper-lyric-transcriber:latest-intel` |
 | AMD Radeon | `ghcr.io/txcjulian/whisper-lyric-transcriber:latest-amd` |
 
-NVIDIA and Intel images are verified end-to-end — see [Requirements](#requirements) for the AMD caveat. NVIDIA legacy is in testing on a Quadro M4000.
+NVIDIA, NVIDIA legacy, and Intel images are verified end-to-end — see [Requirements](#requirements) for the AMD caveat.
 
 ### 3. Verify
 
