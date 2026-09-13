@@ -123,6 +123,8 @@ class FasterWhisperEngine(TranscriptionEngine):
         if self._model is None or self._model_size != model_size:
             from faster_whisper import WhisperModel
 
+            # Release the previous model before allocating its replacement.
+            self.unload_model()
             device = "cuda" if self._backend == "cuda" else "cpu"
             compute_type = "float16" if device == "cuda" else "int8"
             logger.info(
@@ -216,6 +218,8 @@ class OpenAIWhisperEngine(TranscriptionEngine):
         if self._model is None or self._model_size != model_size:
             import whisper
 
+            # Assignment alone keeps the old model alive throughout load_model.
+            self.unload_model()
             logger.info(
                 f"[openai-whisper] Loading '{model_size}' on {self._device}"
             )
