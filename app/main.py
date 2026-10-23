@@ -36,6 +36,8 @@ from app.gpu_backend import (
     get_whisper_model_fit,
     use_faster_whisper,
 )
+from app.runtime_profile import get_runtime_profile
+from app.version import get_version_info
 
 load_dotenv()
 logging.basicConfig(
@@ -52,6 +54,11 @@ job_manager = JobManager(max_workers=1)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    info = get_version_info()
+    logger.info(
+        f"Lyric Transcriber {info['version']} (build {info['build']}, "
+        f"commit {info['commit'][:7]}, image {info['image_variant']})"
+    )
     backend = get_backend()
     device_name = get_device_name()
     logger.info(f"GPU backend: {backend} ({device_name})")
@@ -70,7 +77,11 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down lyric-transcriber service")
 
 
-app = FastAPI(title="Lyric Transcriber API", version="1.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="Lyric Transcriber API",
+    version=get_version_info()["version"],
+    lifespan=lifespan,
+)
 
 
 # ── Health ──────────────────────────────────────────────────────────────────
@@ -81,6 +92,8 @@ def health():
     vram = get_vram_info()
     return {
         "status": "ok",
+        "version": get_version_info(),
+        "runtime_profile": get_runtime_profile() or None,
         "gpu_backend": get_backend(),
         "gpu_name": get_device_name(),
         "transcription_engine": "faster-whisper" if use_faster_whisper() else "openai-whisper",
