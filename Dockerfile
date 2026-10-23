@@ -1,123 +1,167 @@
+# syntax=docker/dockerfile:1
+#
+# One Dockerfile, four images (GPU_BACKEND build arg):
+#   nvidia  -- universal: modern env (cu130 torch + faster-whisper) and
+#              legacy env (cu126 torch + openai-whisper) for Maxwell/Pascal/
+#              Volta; docker/select-profile.sh picks one at start, CPU if no
+#              GPU is visible
+#   intel   -- torch xpu + openai-whisper
+#   amd     -- torch ROCm + openai-whisper
+#   cpu     -- torch cpu + faster-whisper
+#
+# No vendor base images (nvidia/cuda, oneAPI, ROCm): PyTorch's wheels bundle
+# their own CUDA/oneAPI/ROCm runtime libraries, and the container runtime
+# injects the host driver. A slim distro base keeps size and CVE count down.
+
 ARG GPU_BACKEND=nvidia
+ARG UV_VERSION=0.13.5
+ARG PYTHON_VERSION=3.14
+
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
 # ── Base images per backend ────────────────────────────────────────────────
-FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04 AS base-nvidia
-# Same base image as base-nvidia -- requirements-nvidia-legacy.txt pins
-# older cu126 torch wheels (still shipping Maxwell/sm_5x kernels) rather
-# than needing a different system CUDA install.
-FROM nvidia/cuda:12.8.0-runtime-ubuntu22.04 AS base-nvidia-legacy
-FROM intel/oneapi-basekit:2025.3.1-0-devel-ubuntu24.04 AS base-intel
-FROM rocm/rocm-terminal:6.4 AS base-amd
-FROM python:3.11-slim AS base-cpu
+FROM debian:trixie-20261020-slim AS base-nvidia
+# The nvidia/cuda base image used to set these; without them the NVIDIA
+# container runtime injects neither the driver's CUDA libraries nor
+# nvidia-smi, and every GPU node silently falls back to CPU.
+ENV NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+FROM debian:trixie-20261020-slim AS base-amd
+FROM debian:trixie-20261020-slim AS base-cpu
+
+# Intel needs the user-space GPU driver (Level-Zero + compute-runtime) inside
+# the container. Debian's and Ubuntu 24.04's packaged versions are too old for
+# Battlemage (Arc B580) -- an old compute-runtime crashes encoding GPU
+# commands ("Abort was called ... command_encoder_xehp_and_later.inl").
+# Ubuntu 26.04's own archive ships compute-runtime 26.x, so no PPA is needed.
+FROM ubuntu:26.04 AS base-intel
+
+# ── Build stages: Python + virtual environments ─────────────────────────────
+FROM base-${GPU_BACKEND} AS builder
+ARG PYTHON_VERSION
+COPY --from=uv /uv /usr/local/bin/uv
+ENV UV_PYTHON_INSTALL_DIR=/opt/python \
+    UV_PYTHON_PREFERENCE=only-managed \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv python install ${PYTHON_VERSION}
+WORKDIR /build
+COPY pyproject.toml uv.lock ./
+
+# Primary environment: /opt/venv/<GPU_BACKEND>.
+FROM builder AS venv-primary
+ARG GPU_BACKEND
+ARG PYTHON_VERSION
+RUN --mount=type=cache,target=/root/.cache/uv \
+    UV_PROJECT_ENVIRONMENT=/opt/venv/${GPU_BACKEND} \
+    uv sync --frozen --no-install-project --no-dev --python ${PYTHON_VERSION} --extra ${GPU_BACKEND}
+# nvidia: record the oldest GPU architecture the cu130 torch wheel ships
+# kernels for, so select-profile.sh's legacy cutoff follows the wheel instead
+# of a hard-coded value. _cuda_getArchFlags() works without a GPU (unlike
+# torch.cuda.get_arch_list()); it's private API, hence the fallback.
+RUN if [ "$GPU_BACKEND" = "nvidia" ]; then \
+        /opt/venv/nvidia/bin/python -c "import re, torch; \
+archs = [int(a) for a in re.findall(r'sm_(\d+)', torch._C._cuda_getArchFlags())]; \
+m = min(archs); print(f'{m // 10}.{m % 10}')" > /opt/venv/nvidia.min-compute-cap \
+        || { echo "WARNING: could not read torch CUDA arch list, assuming 7.5" >&2; \
+             echo 7.5 > /opt/venv/nvidia.min-compute-cap; }; \
+        echo "nvidia min compute capability: $(cat /opt/venv/nvidia.min-compute-cap)"; \
+    fi
+
+# Second environment, nvidia only: /opt/venv/nvidia-legacy. Its own stage so
+# BuildKit builds both environments in parallel and each lands in its own
+# image layer. Other backends leave this empty.
+FROM builder AS venv-secondary
+ARG GPU_BACKEND
+ARG PYTHON_VERSION
+RUN --mount=type=cache,target=/root/.cache/uv \
+    mkdir -p /opt/venv \
+    && if [ "$GPU_BACKEND" = "nvidia" ]; then \
+        UV_PROJECT_ENVIRONMENT=/opt/venv/nvidia-legacy \
+        uv sync --frozen --no-install-project --no-dev --python ${PYTHON_VERSION} --extra nvidia-legacy; \
+    fi
 
 # ── Runtime stage ──────────────────────────────────────────────────────────
 FROM base-${GPU_BACKEND} AS runtime
-
-ARG GPU_BACKEND=nvidia
+ARG GPU_BACKEND
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
-ENV GPU_BACKEND=${GPU_BACKEND}
-# Immutable record of what this image was actually built/installed for --
-# unlike GPU_BACKEND above, compose files also set GPU_BACKEND as a runtime
-# override (e.g. to force cpu), which would otherwise let a runtime value
-# silently pick an engine whose packages this image never installed (see
-# app/gpu_backend.py's use_faster_whisper()).
-ENV GPU_BACKEND_BUILD=${GPU_BACKEND}
 
-# Install Python 3.11 + system deps (skip for cpu base which already has Python)
-#
-# Intel driver repo (see below) is added here too, before the python3 ->
-# 3.11 symlink swap: add-apt-repository's apt_pkg module is only built
-# for the base image's original Python, so calling it after the swap
-# fails with "ModuleNotFoundError: No module named 'apt_pkg'".
-RUN if [ "$GPU_BACKEND" != "cpu" ]; then \
-        apt-get update && apt-get install -y \
-            software-properties-common \
-        && add-apt-repository ppa:deadsnakes/ppa \
-        && if [ "$GPU_BACKEND" = "intel" ]; then add-apt-repository -y ppa:kobuk-team/intel-graphics; fi \
-        && apt-get update && apt-get install -y \
-            python3.11 \
-            python3.11-venv \
-            python3.11-dev \
-            ffmpeg \
-            libsndfile1 \
-            curl \
-        && rm -rf /var/lib/apt/lists/* \
-        && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
-        && ln -sf /usr/bin/python3.11 /usr/bin/python \
-        && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11; \
-    else \
-        apt-get update && apt-get install -y \
-            ffmpeg \
-            libsndfile1 \
-        && rm -rf /var/lib/apt/lists/*; \
-    fi
-
-# Intel: oneapi-basekit bundles an older Level-Zero/compute-runtime
-# (1.6.x) that crashes encoding GPU commands on Battlemage (Arc B580) --
-# "Abort was called ... command_encoder_xehp_and_later.inl". Install the
-# current driver from Intel's official PPA (repo added above) per
-# https://dgpu-docs.intel.com/installation-guides/installing-packages-from-the-intel-ppa.html
-# Requires the ubuntu24.04 base image above: this PPA has no jammy (22.04)
-# build, and Intel's own repositories.intel.com jammy repo (already
-# configured in the base image) tops out at driver 24.39, still too old
-# for B580. The PPA's noble build matches the host's driver version exactly.
-RUN if [ "$GPU_BACKEND" = "intel" ]; then \
-        apt-get update && apt-get install -y \
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        libsndfile1 \
+        ca-certificates \
+    && if [ "$GPU_BACKEND" = "intel" ]; then \
+        apt-get install -y --no-install-recommends \
             libze-intel-gpu1 \
             libze1 \
-            intel-opencl-icd \
-            intel-metrics-discovery \
-            intel-gsc \
-        && rm -rf /var/lib/apt/lists/*; \
-    fi
+            intel-opencl-icd; \
+    fi \
+    && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+# Non-root runtime user. IDs are assigned by the system and re-mapped to
+# PUID/PGID at container start.
+#
+# Ubuntu images ship a default "ubuntu" user at UID/GID 1000. entrypoint.sh
+# force-remaps appuser onto PUID/PGID (1000 by default) via `usermod -o`,
+# which would otherwise collide with that account -- setpriv --init-groups
+# then resolves the shared UID back to "ubuntu" and loads its groups instead
+# of appuser's, silently dropping GPU device group membership. Remove it so
+# PUID=1000 stays unambiguous.
+RUN userdel -r ubuntu 2>/dev/null; \
+    groupadd appgroup \
+    && useradd -g appgroup -M -s /bin/false appuser \
+    && mkdir -p /app/models /app/jobs \
+    && chown -R appuser:appgroup /app
 
-# Install backend-specific requirements
-COPY requirements.txt requirements-${GPU_BACKEND}.txt ./
-RUN python3 -m pip install --no-cache-dir -r requirements-${GPU_BACKEND}.txt
+COPY --from=builder /opt/python /opt/python
+COPY --from=venv-primary /opt/venv/ /opt/venv/
+COPY --from=venv-secondary /opt/venv/ /opt/venv/
 
-COPY app/ ./app/
-COPY entrypoint.sh /entrypoint.sh
-
-ENV TORCH_HOME=/app/models/torch
-ENV HF_HOME=/app/models/huggingface
-ENV XDG_CACHE_HOME=/app/models/whisper
+ENV PATH=/opt/venv/${GPU_BACKEND}/bin:${PATH} \
+    IMAGE_VARIANT=${GPU_BACKEND} \
+    TORCH_HOME=/app/models/torch \
+    HF_HOME=/app/models/huggingface \
+    XDG_CACHE_HOME=/app/models/whisper \
+    PYTHONUNBUFFERED=1
 # openai-whisper's CUDA median-filter kernel (used for word-alignment) is
 # JIT-compiled via Triton, which defaults its cache to ~/.triton -- HOME
 # still points at /root (root's own env, untouched by entrypoint.sh's
 # setpriv) when appuser actually runs the process, so that write fails.
 ENV TRITON_CACHE_DIR=/app/models/triton
-ENV PYTHONUNBUFFERED=1
-
 # Level-Zero's sysman subsystem, which torch.xpu uses for device
 # enumeration, is disabled by default -- without this, torch.xpu sees
 # zero devices and gpu_backend.py silently falls back to CPU.
 ENV ZES_ENABLE_SYSMAN=1
 
-# torch's pip-installed oneAPI runtime libs (dist-packages/../../.. -> /usr/local/lib)
-# must resolve before the base image's own system oneAPI install, or symbol
-# versions can mismatch between the two copies despite matching sonames.
-ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
+COPY --chmod=755 docker/entrypoint.sh /entrypoint.sh
+COPY docker/select-profile.sh /usr/local/lib/select-profile.sh
 
-# Non-root runtime user. IDs are assigned by the system (some base images
-# already occupy GID/UID 1000) and re-mapped to PUID/PGID at container start.
-#
-# Some base images (e.g. Ubuntu 24.04) ship a default "ubuntu" user at
-# UID/GID 1000. entrypoint.sh force-remaps appuser onto PUID/PGID (1000
-# by default) via `usermod -o`, which would otherwise collide with that
-# account -- setpriv --init-groups then resolves the shared UID back to
-# "ubuntu" and loads its groups instead of appuser's, silently dropping
-# GPU device group membership. Remove it so PUID=1000 stays unambiguous.
-RUN userdel -r ubuntu 2>/dev/null; \
-    groupadd appgroup \
-    && useradd -g appgroup -M -s /bin/false appuser \
-    && mkdir -p /app/models /app/jobs \
-    && chown -R appuser:appgroup /app \
-    && chmod +x /entrypoint.sh
+WORKDIR /app
+# App code last: it changes most often, so everything above stays cached.
+COPY pyproject.toml ./
+COPY app/ ./app/
+
+# Build metadata, declared last so a new commit only touches metadata.
+ARG APP_VERSION=
+ARG APP_BUILD=dev
+ARG APP_COMMIT=unknown
+ARG BUILD_DATE=
+ENV APP_VERSION=${APP_VERSION} \
+    APP_BUILD=${APP_BUILD} \
+    APP_COMMIT=${APP_COMMIT}
+LABEL org.opencontainers.image.title="lyric-transcriber" \
+      org.opencontainers.image.description="Song lyrics transcription: Demucs + Whisper + Genius (${GPU_BACKEND})" \
+      org.opencontainers.image.source="https://github.com/TXCJulian/Whisper_Lyric-Transcriber" \
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.revision="${APP_COMMIT}" \
+      org.opencontainers.image.created="${BUILD_DATE}"
 
 EXPOSE 3334
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3334", "--no-access-log"]
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3334", "--no-access-log"]
