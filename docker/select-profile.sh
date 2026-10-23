@@ -16,11 +16,15 @@
 # puts $VENV_DIR/bin first on PATH. NVIDIA_SMI and VENV_ROOT are overridable
 # for testing.
 
-# Prints the first GPU's compute capability (e.g. "8.6"), or nothing if
-# nvidia-smi is missing, fails, or reports no GPU.
-_gpu_compute_cap() {
+# cu130 torch needs a CUDA 13 capable host driver; on an older driver the
+# modern env would silently see no GPU, while the legacy env (cu126) still runs.
+_MIN_DRIVER_CUDA13=580
+
+# Prints the first GPU's "<compute capability>,<driver version>" (e.g.
+# "8.6,580.65.06"), or nothing if nvidia-smi is missing, fails, or reports no GPU.
+_gpu_query() {
     command -v "${NVIDIA_SMI:-nvidia-smi}" >/dev/null 2>&1 || return 0
-    "${NVIDIA_SMI:-nvidia-smi}" --query-gpu=compute_cap --format=csv,noheader 2>/dev/null \
+    "${NVIDIA_SMI:-nvidia-smi}" --query-gpu=compute_cap,driver_version --format=csv,noheader 2>/dev/null \
         | head -n 1 | tr -d ' \r' || true
 }
 
@@ -54,7 +58,10 @@ select_profile() {
         RUNTIME_PROFILE=cpu
         _reason="forced by GPU_BACKEND"
     else
-        _cap=$(_gpu_compute_cap)
+        _gpu=$(_gpu_query)
+        _cap=${_gpu%%,*}
+        _driver_major=""
+        case "$_gpu" in *,*) _driver_major=${_gpu#*,}; _driver_major=${_driver_major%%.*} ;; esac
         _min=$(cat "$_root/nvidia.min-compute-cap" 2>/dev/null || true)
         _is_cap "$_min" || _min=7.5
         if ! _is_cap "$_cap"; then
@@ -63,6 +70,10 @@ select_profile() {
         elif _cap_lt "$_cap" "$_min"; then
             RUNTIME_PROFILE=nvidia-legacy
             _reason="compute capability $_cap < $_min"
+        elif case "$_driver_major" in ''|*[!0-9]*) false ;; esac \
+            && [ "$_driver_major" -lt "$_MIN_DRIVER_CUDA13" ]; then
+            RUNTIME_PROFILE=nvidia-legacy
+            _reason="driver $_driver_major < $_MIN_DRIVER_CUDA13 needed by CUDA 13; update the host driver for faster-whisper"
         else
             RUNTIME_PROFILE=nvidia
             _reason="compute capability $_cap"
