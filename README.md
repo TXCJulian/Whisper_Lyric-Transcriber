@@ -17,7 +17,7 @@ Audio Upload ─► Vocal Separation (Demucs) ─► Transcription (faster-whisp
 ```
 
 1. **Vocal Separation** — Isolates vocals from the audio using Demucs v4 (`htdemucs` by default, configurable via `DEMUCS_MODEL`), the successor to the older HDemucs bundle previously used here. `apply_model()` splits long tracks into overlapping segments internally to stay within VRAM limits. The model is unloaded after this step to free GPU memory for Whisper.
-2. **Transcription** — Converts vocals to text with word-level timestamps. Uses faster-whisper (CTranslate2) on NVIDIA/CPU or OpenAI Whisper (PyTorch) on Intel XPU/AMD ROCm. VAD filtering removes silence. An initial prompt with artist/title is passed to improve proper name recognition. The model is kept warm for `WHISPER_IDLE_UNLOAD_SECONDS` (default 15s) after each job so back-to-back requests skip the reload, then auto-unloads to free GPU memory when idle.
+2. **Transcription** — Converts vocals to text with word-level timestamps. Uses faster-whisper (CTranslate2) on NVIDIA (Turing and newer) and CPU, or OpenAI Whisper (PyTorch) on older NVIDIA cards, Intel XPU and AMD ROCm. VAD filtering removes silence. An initial prompt with artist/title is passed to improve proper name recognition. The model is kept warm for `WHISPER_IDLE_UNLOAD_SECONDS` (default 15s) after each job so back-to-back requests skip the reload, then auto-unloads to free GPU memory when idle.
 3. **Lyrics Correction** — Fetches reference lyrics from Genius and applies word-level fuzzy matching (`difflib.SequenceMatcher`) to fix transcription errors. Splits long lines at natural break points based on the Genius line structure. Handles Genius's Cyrillic/Greek homoglyph copy-protection by mapping them back to Latin equivalents.
 
 Each step is optional and can be run independently via separate endpoints.
@@ -27,8 +27,8 @@ Each step is optional and can be run independently via separate endpoints.
 - Docker (recommended)
 - A supported GPU (optional, CPU fallback available):
   - **NVIDIA** — NVIDIA Container Toolkit + CUDA GPU — verified end-to-end on a **RTX 3060 Ti** on ***Ubuntu 26.04 Server*** running ***Kubernetes (k3s)***. This should also work on ***Windows 11*** via Docker Desktop, though that path is no longer part of end-to-end verification for newer releases of this project.
-  - **NVIDIA legacy** (`GPU_BACKEND=nvidia-legacy`) — Maxwell/Pascal/Volta cards (e.g. **Quadro M4000**) that the standard NVIDIA image's newer wheels no longer ship kernels for. Verified end-to-end on a **Quadro M4000**. Uses the OpenAI Whisper engine (faster-whisper's CTranslate2 backend also dropped these architectures); Triton JIT kernels aren't supported on Maxwell either, so word-alignment falls back to whisper's slower pure-PyTorch implementation — expect noticeably longer transcription times than the standard NVIDIA backend.
-  - **Intel Arc** — Intel GPU with oneAPI/Level Zero drivers. Requires **Above 4G Decoding** and **Resizable BAR** enabled in the system BIOS/UEFI, or the GPU will not be usable by the container. Verified end-to-end on an **Arc B580** (Battlemage) on ***Ubuntu 26.04 Desktop*** running ***Docker***. The image installs a current Level-Zero/compute-runtime driver from [Intel's official PPA](https://dgpu-docs.intel.com/installation-guides/installing-packages-from-the-intel-ppa.html) at build time, since the driver bundled in the oneAPI base image predates full Battlemage support.
+  - **Older NVIDIA cards** (Maxwell/Pascal/Volta, e.g. **Quadro M4000** / **Quadro P2200**) — handled by the same `nvidia` image: at start it reads the GPU's compute capability and, below 7.5, switches to a second environment built on PyTorch's legacy cu126 wheels (the newer wheels no longer ship kernels for these architectures). That environment uses the OpenAI Whisper engine, since faster-whisper's CTranslate2 backend also dropped these architectures; on Maxwell, Triton JIT kernels aren't supported either, so word-alignment falls back to whisper's slower pure-PyTorch implementation — expect noticeably longer transcription times than on newer cards.
+  - **Intel Arc** — Intel GPU with Level Zero drivers. Requires **Above 4G Decoding** and **Resizable BAR** enabled in the system BIOS/UEFI, or the GPU will not be usable by the container. Verified end-to-end on an **Arc B580** (Battlemage) on ***Ubuntu 26.04 Desktop*** running ***Docker***. The image is based on Ubuntu 26.04, whose packaged Level-Zero/compute-runtime driver is new enough for Battlemage.
   - **AMD Radeon** — ROCm-supported GPU. ⚠️ **Untested** — the Docker image builds and the CI pipeline publishes it, but the pipeline has not been run against real AMD hardware.
 - Genius API access token (for lyrics correction)
 
@@ -38,7 +38,7 @@ Each step is optional and can be run independently via separate endpoints.
 
 1. Create an API client at [genius.com](https://genius.com/api-clients)
 2. Copy your access token
-3. Create a `.env` file in the project root (see `.env.example`):
+3. Create a `.env` file in the repository root (see `.env.example`):
 
    ```bash
    GENIUS_ACCESS_TOKEN=your_token_here
@@ -51,37 +51,47 @@ Each step is optional and can be run independently via separate endpoints.
 
 ### 2. Run with Docker Compose
 
-```bash
-# NVIDIA (default — docker-compose.override.yml auto-loads GPU reservation)
-docker compose up -d
+Run from the repository root:
 
-# NVIDIA legacy (Maxwell/Pascal/Volta, e.g. Quadro M4000)
-GPU_BACKEND=nvidia-legacy docker compose -f docker-compose.yml -f docker-compose.nvidia-legacy.yml up -d --build
+```bash
+# NVIDIA (any generation — older cards are detected automatically)
+docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.nvidia.yml --env-file .env up -d --build
 
 # Intel Arc
-GPU_BACKEND=intel docker compose -f docker-compose.yml -f docker-compose.intel.yml up -d --build
+GPU_BACKEND=intel docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.intel.yml --env-file .env up -d --build
 
 # AMD Radeon
-GPU_BACKEND=amd docker compose -f docker-compose.yml -f docker-compose.amd.yml up -d --build
+GPU_BACKEND=amd docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.amd.yml --env-file .env up -d --build
 
 # CPU only
-GPU_BACKEND=cpu docker compose -f docker-compose.yml up -d --build
+GPU_BACKEND=cpu docker compose -f deploy/compose/docker-compose.yml --env-file .env up -d --build
 ```
 
-This builds the image with the appropriate base (CUDA 12.8, oneAPI, ROCm, or Python 3.11-slim), starts the service on port **3334**, and creates a named volume for model caching.
+This builds the image for your hardware (slim Debian base — Ubuntu 26.04 for Intel — with Python 3.14), starts the service on port **3334**, and creates a named volume for model caching.
 
 #### Prebuilt Images
 
-CI publishes prebuilt images to GitHub Container Registry on every push to `master`:
+CI publishes prebuilt images to GitHub Container Registry (`ghcr.io/txcjulian/whisper-lyric-transcriber`), one per hardware variant:
 
-| Backend | Image |
+| Variant | Runs on |
 | --- | --- |
-| NVIDIA | `ghcr.io/txcjulian/whisper-lyric-transcriber:latest-nvidia` |
-| NVIDIA legacy | `ghcr.io/txcjulian/whisper-lyric-transcriber:latest-nvidia-legacy` |
-| Intel Arc | `ghcr.io/txcjulian/whisper-lyric-transcriber:latest-intel` |
-| AMD Radeon | `ghcr.io/txcjulian/whisper-lyric-transcriber:latest-amd` |
+| `nvidia` | Every NVIDIA generation from Maxwell on (picks the modern or legacy environment from the GPU's compute capability at start), and CPU when no GPU is visible |
+| `intel` | Intel Arc (XPU) |
+| `amd` | AMD Radeon (ROCm) |
+| `cpu` | CPU only — the smallest image |
 
-NVIDIA, NVIDIA legacy, and Intel images are verified end-to-end — see [Requirements](#requirements) for the AMD caveat.
+Tags, with `<variant>` one of the above:
+
+| Tag | Moves? | Meaning |
+| --- | --- | --- |
+| `latest-<variant>` | yes | Newest build from `master` |
+| `X.Y.Z-<variant>`, `X.Y-<variant>`, `X-<variant>` | yes | Newest build of that version line |
+| `X.Y.Z-N-<variant>` | **no** | One specific build — pin this in deployments |
+| `beta-<variant>` | yes | Newest build from any feature branch (testing only) |
+
+The version `X.Y.Z` is the one in `pyproject.toml`. `N` is the build number: it starts at 1 for each new version and goes up with every rebuild of the same version. CI rebuilds `master` weekly to pick up OS security updates, so `2.0.0-3-nvidia` is the same code as `2.0.0-1-nvidia` with newer system packages. `GET /health` reports which version, build and commit is running.
+
+> **`*-nvidia-legacy` tags are discontinued** and no longer updated. Switch to `*-nvidia` — it detects Maxwell/Pascal/Volta cards on its own. An existing `GPU_BACKEND=nvidia-legacy` setting keeps working and forces the legacy environment.
 
 ### 3. Verify
 
@@ -92,6 +102,8 @@ curl http://localhost:3334/health
 ```json
 {
   "status": "ok",
+  "version": {"version": "2.0.0", "build": "3", "commit": "4f1c2e9…", "image_variant": "nvidia"},
+  "runtime_profile": "nvidia",
   "gpu_backend": "cuda",
   "gpu_name": "NVIDIA GeForce RTX ...",
   "transcription_engine": "faster-whisper",
@@ -111,7 +123,7 @@ All processing endpoints are asynchronous — they return a `job_id` immediately
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/health` | Service status, GPU backend/name, transcription engine, total VRAM, and per-model VRAM fit (`whisper_model_fit`) so callers can rule out model sizes too large for the GPU |
+| `GET` | `/health` | Service status, running version/build/commit and image variant (`version`), the environment the image chose at start (`runtime_profile`: `nvidia`, `nvidia-legacy`, `intel`, `amd` or `cpu`), GPU backend/name, transcription engine, total VRAM, and per-model VRAM fit (`whisper_model_fit`) so callers can rule out model sizes too large for the GPU |
 
 ### Processing Endpoints
 
@@ -214,72 +226,71 @@ Da kann man nichts machen
 | `DEMUCS_MODEL` | `htdemucs` | Demucs model name for vocal separation (e.g. `htdemucs` for faster/lower-latency single-pass separation) |
 | `DEMUCS_SEGMENT_SECONDS` | model default | Override the chunk length `apply_model()` uses to split long tracks; lower it if you hit GPU OOM on very long tracks |
 | `JOBS_DIR` | `/app/jobs` | Base directory for job input/output files |
-| `GPU_BACKEND` | auto-detect | Override GPU detection: `cuda`/`nvidia`, `nvidia-legacy` (Maxwell/Pascal/Volta), `xpu`/`intel`, `rocm`/`amd`, or `cpu` |
+| `GPU_BACKEND` | auto-detect | Usually leave unset. `nvidia-legacy` forces the Maxwell/Pascal/Volta environment and `cpu` forces CPU; `nvidia`/`cuda` (or unset) let the `nvidia` image pick by GPU generation. Outside Docker it also accepts `xpu`/`intel` and `rocm`/`amd`. With Docker Compose, set `RUNTIME_GPU_BACKEND` instead, because compose uses `GPU_BACKEND` to choose which image variant to build |
 | `PUID` | `1000` | UID the container process runs as (container runs as a non-root `appuser`) |
 | `PGID` | `1000` | GID the container process runs as |
 
 ### Docker Compose
 
-The base `docker-compose.yml` contains no GPU reservation. Per-backend override files handle device passthrough:
+Compose files live in `deploy/compose/`. The base `docker-compose.yml` contains no GPU reservation; per-backend override files handle device passthrough:
 
 - **Port**: `3334`
 - **Volume**: `model-cache` persists downloaded model weights (~5 GB) across container restarts
 - **Restart**: `unless-stopped`
-- **Build arg**: `GPU_BACKEND` selects base image and requirements
+- **Build arg**: `GPU_BACKEND` selects the image variant (`nvidia`, `intel`, `amd`, `cpu`)
 
 #### GPU Device Passthrough
 
-| Backend | Compose command |
+| Backend | Override file |
 | --- | --- |
-| NVIDIA | `docker compose up` (override auto-loaded) |
-| NVIDIA legacy | `GPU_BACKEND=nvidia-legacy docker compose -f docker-compose.yml -f docker-compose.nvidia-legacy.yml up --build` |
-| Intel | `GPU_BACKEND=intel docker compose -f docker-compose.yml -f docker-compose.intel.yml up --build` |
-| AMD | `GPU_BACKEND=amd docker compose -f docker-compose.yml -f docker-compose.amd.yml up --build` |
-| CPU | `GPU_BACKEND=cpu docker compose -f docker-compose.yml up --build` |
+| NVIDIA (all generations) | `deploy/compose/docker-compose.nvidia.yml` |
+| Intel | `deploy/compose/docker-compose.intel.yml` |
+| AMD | `deploy/compose/docker-compose.amd.yml` |
+| CPU | none |
+
+See [Run with Docker Compose](#2-run-with-docker-compose) for the full commands.
+
+### Kubernetes
+
+Generic Kustomize examples (base + NVIDIA overlay) and notes on GPU → CPU failover are in [`deploy/k8s/`](deploy/k8s/README.md).
 
 ## Local Development (Without Docker)
 
-```bash
-python -m venv .venv
-.venv\Scripts\activate  # Windows
-# source .venv/bin/activate  # Linux/macOS
+Dependencies are managed with [uv](https://docs.astral.sh/uv/). The project needs Python 3.14 on Linux x86_64; on Windows, use WSL or Docker. Each hardware target is an extra, and you pick exactly one:
 
-# Install for your GPU:
-pip install -r requirements-nvidia.txt        # NVIDIA CUDA
-pip install -r requirements-nvidia-legacy.txt # NVIDIA Maxwell/Pascal/Volta
-pip install -r requirements-intel.txt         # Intel Arc
-pip install -r requirements-amd.txt           # AMD Radeon
-pip install -r requirements-cpu.txt           # CPU only
+```bash
+uv sync --extra nvidia          # NVIDIA Turing (RTX 20xx) and newer
+uv sync --extra nvidia-legacy   # NVIDIA Maxwell/Pascal/Volta
+uv sync --extra intel           # Intel Arc
+uv sync --extra amd             # AMD Radeon
+uv sync --extra cpu             # CPU only
 ```
 
 Start the server:
 
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port 3334
+uv run uvicorn app.main:app --host 0.0.0.0 --port 3334
 ```
 
-Optionally override auto-detection: `GPU_BACKEND=cpu uvicorn app.main:app --host 0.0.0.0 --port 3334`
+With the `nvidia-legacy` extra, also set `GPU_BACKEND=nvidia-legacy` so the app uses the OpenAI Whisper engine. Inside Docker the entrypoint does this for you. `GPU_BACKEND=cpu` forces CPU.
 
 ## Project Structure
 
 ```text
-├── Dockerfile              # Multi-stage build with GPU_BACKEND arg
-├── docker-compose.yml      # Base service definition (no GPU config)
-├── docker-compose.override.yml # NVIDIA GPU reservation (auto-loaded)
-├── docker-compose.nvidia.yml   # NVIDIA GPU reservation (explicit)
-├── docker-compose.nvidia-legacy.yml # NVIDIA legacy (Maxwell/Pascal/Volta) GPU reservation
-├── docker-compose.nvidia-legacy.deploy.yml # Standalone: pulls prebuilt legacy image, no build
-├── docker-compose.intel.yml    # Intel Arc device passthrough
-├── docker-compose.amd.yml      # AMD ROCm device passthrough
-├── requirements.txt        # Shared Python dependencies
-├── requirements-nvidia.txt # PyTorch CUDA wheels
-├── requirements-nvidia-legacy.txt # PyTorch CUDA wheels (legacy, cu126) + openai-whisper
-├── requirements-intel.txt  # PyTorch XPU wheels
-├── requirements-amd.txt    # PyTorch ROCm wheels
-├── requirements-cpu.txt    # PyTorch CPU wheels
+├── Dockerfile              # Multi-stage build, GPU_BACKEND arg selects the variant
+├── pyproject.toml          # Dependencies; one extra per hardware target
+├── uv.lock                 # Locked versions for every extra
+├── docker/
+│   ├── entrypoint.sh       # PUID/PGID remap, GPU groups, drops root
+│   └── select-profile.sh   # Picks the runtime environment (NVIDIA modern/legacy/CPU)
+├── deploy/
+│   ├── compose/            # docker-compose.yml + nvidia/intel/amd overrides
+│   └── k8s/                # Generic Kustomize examples
 ├── .env                    # Genius API token (not committed)
 └── app/
     ├── main.py             # FastAPI app, route handlers, startup logic
+    ├── version.py          # Version/build/commit reported by /health
+    ├── runtime_profile.py  # Runtime profile chosen by the entrypoint
     ├── models.py           # Pydantic request/response models
     ├── job_manager.py      # Async job queue with threading, TTL eviction
     ├── pipeline.py         # Orchestrates separation → transcription → correction
@@ -312,8 +323,9 @@ Artist and title for the Genius lookup are read from audio metadata tags (via mu
 | Speech-to-Text | faster-whisper (CUDA/CPU), OpenAI Whisper (XPU/ROCm) |
 | Lyrics Reference | Genius API (`lyricsgenius`) |
 | Audio Metadata | mutagen |
-| GPU Support | NVIDIA CUDA, Intel XPU, AMD ROCm, CPU fallback |
-| Container Runtime | Docker, multi-stage build |
+| GPU Support | NVIDIA CUDA (cu130, plus cu126 for Maxwell/Pascal/Volta), Intel XPU, AMD ROCm 7.2, CPU fallback |
+| Python | 3.14, dependencies managed with uv |
+| Container Runtime | Docker, multi-stage build on a slim Debian base (Ubuntu 26.04 for Intel) |
 
 ## License
 
