@@ -27,4 +27,9 @@ for dev in /dev/dri/renderD* /dev/dri/card* /dev/kfd; do
     fi
 done
 
+# Pick the runtime profile / Python environment (sets PATH; setpriv keeps
+# the environment, so the CMD's `python` resolves into the chosen venv).
+. /usr/local/lib/select-profile.sh
+select_profile
+
 exec setpriv --reuid="$PUID" --regid="$PGID" --init-groups "$@"
