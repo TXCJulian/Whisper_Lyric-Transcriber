@@ -1,0 +1,14 @@
+# Model cache (~5 GB of Whisper + Demucs weights), kept across restarts.
+# For failover between nodes use a ReadWriteMany-capable storage class
+# (e.g. NFS); with ReadWriteOnce the pod can only reschedule to nodes that
+# can attach the volume.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lyric-transcriber-models
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi

@@ -1,0 +1,73 @@
+# Runs anywhere: no GPU is requested, so on a plain node the image falls
+# back to CPU. Use overlays/nvidia to request an NVIDIA GPU.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lyric-transcriber
+spec:
+  replicas: 1
+  # One job queue per pod and a single GPU / RWO cache: never run two at once.
+  strategy:
+    type: Recreate
+  template:
+    spec:
+      containers:
+        - name: lyric-transcriber
+          # Pin an immutable <version>-<build>-<variant> tag; see the README
+          # for the tag scheme.
+          image: ghcr.io/txcjulian/whisper-lyric-transcriber:2.0.0-1-nvidia
+          ports:
+            - name: http
+              containerPort: 3334
+          env:
+            - name: GENIUS_ACCESS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: lyric-transcriber
+                  key: GENIUS_ACCESS_TOKEN
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: lyric-transcriber
+                  key: HF_TOKEN
+                  optional: true
+            - name: PRELOAD_MODELS
+              value: "true"
+            - name: JOB_TTL_SECONDS
+              value: "3600"
+          volumeMounts:
+            - name: models
+              mountPath: /app/models
+            - name: jobs
+              mountPath: /app/jobs
+          # First start downloads ~5 GB of models before the server answers.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 90
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 5
+          resources:
+            requests:
+              cpu: 500m
+              memory: 4Gi
+            limits:
+              memory: 12Gi
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: lyric-transcriber-models
+        - name: jobs
+          emptyDir: {}

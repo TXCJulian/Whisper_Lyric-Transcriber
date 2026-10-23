@@ -1,0 +1,8 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Requests one NVIDIA GPU via the NVIDIA device plugin. Any generation works:
+# the image picks the modern or legacy environment from the GPU it gets.
+resources:
+  - ../../base
+patches:
+  - path: gpu.yaml

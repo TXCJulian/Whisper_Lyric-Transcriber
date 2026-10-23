@@ -1,0 +1,13 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lyric-transcriber
+spec:
+  template:
+    spec:
+      runtimeClassName: nvidia
+      containers:
+        - name: lyric-transcriber
+          resources:
+            limits:
+              nvidia.com/gpu: 1
