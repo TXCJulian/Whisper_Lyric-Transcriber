@@ -13,6 +13,10 @@ dependencies = [
     # the version this was verified against, since that's undocumented/
     # internal API.
     "faster-whisper==1.2.1",
+    # faster-whisper 1.2.1's decode_audio() passes av.open(metadata_errors=...),
+    # which PyAV 19 removed -- every faster-whisper transcription fails with
+    # a TypeError. Lift together with a faster-whisper release that drops it.
+    "av>=18.1,<19",
     "lyricsgenius>=3.15.0",
     "mutagen>=1.48.1",
     "fastapi[standard]>=0.161.0",
