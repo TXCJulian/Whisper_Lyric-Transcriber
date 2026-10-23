@@ -89,7 +89,11 @@ ARG GPU_BACKEND
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
 
+# `upgrade` because the base image tag is pinned: without it, the weekly
+# no-cache rebuild would reinstall only the packages below and keep the
+# base's own (glibc, openssl, ...) at the pinned snapshot's versions.
 RUN apt-get update \
+    && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
         ffmpeg \
         libsndfile1 \

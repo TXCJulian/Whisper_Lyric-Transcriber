@@ -17,8 +17,11 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  # Never cancel a scheduled rebuild because a push came in.
-  cancel-in-progress: ${{ github.event_name != 'schedule' }}
+  # Feature branches: newest push wins. master: never cancel -- GitHub applies
+  # cancel-in-progress from the *new* run, so a push would otherwise kill a
+  # running weekly rebuild (losing its OS refresh) or leave a half-pushed
+  # build number behind.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 env:
   IMAGE: ghcr.io/txcjulian/whisper-lyric-transcriber
@@ -61,11 +64,10 @@ jobs:
             exit 0
           fi
           command -v skopeo >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
-          # A package with no tags yet (or no package at all) makes skopeo
-          # fail -- that just means this is build 1.
-          tags=$(skopeo list-tags --creds "$REGISTRY_USER:$REGISTRY_TOKEN" "docker://$IMAGE" 2>/dev/null \
-            | jq -r '.Tags[]' || true)
-          build=$(printf '%s\n' "$tags" | sh .github/scripts/next-build-number.sh "$VERSION" nvidia)
+          # Fails on anything but "repository not found", so a registry
+          # hiccup can never restart the count and overwrite X.Y.Z-N tags.
+          tags=$(sh .github/scripts/registry-tags.sh "$IMAGE")
+          build=$(printf '%s\n' "$tags" | sh .github/scripts/next-build-number.sh "$VERSION")
           echo "Version $VERSION, build $build"
           echo "build=$build" >> "$GITHUB_OUTPUT"
 
@@ -146,8 +148,10 @@ jobs:
   git-tag:
     name: Tag release
     needs: [meta, docker-publish]
-    # Only the first build of a new version gets a git tag.
-    if: needs.meta.outputs.is_release == 'true' && needs.meta.outputs.build == '1'
+    # Runs on every release build, not just N=1: if the first build of a
+    # version failed somewhere, a later one still creates the tag. An existing
+    # tag is never moved (checked below).
+    if: needs.meta.outputs.is_release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
