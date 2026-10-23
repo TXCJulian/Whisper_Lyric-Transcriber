@@ -1,0 +1,102 @@
+[project]
+name = "lyric-transcriber"
+version = "2.0.0"
+description = "Automated song lyrics transcription: Demucs vocal separation, Whisper STT, Genius correction"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.14,<3.15"
+dependencies = [
+    "soundfile>=0.14.0",
+    "demucs>=4.1.0",
+    # transcription_engine.py's OpenAIWhisperEngine reaches into
+    # faster_whisper.vad (SpeechTimestampsMap, collect_chunks,
+    # get_speech_timestamps) for VAD filtering on every backend; pinned to
+    # the version this was verified against, since that's undocumented/
+    # internal API.
+    "faster-whisper==1.2.1",
+    "lyricsgenius>=3.15.0",
+    "mutagen>=1.48.1",
+    "fastapi[standard]>=0.161.0",
+    "uvicorn[standard]>=0.54.0",
+    "python-dotenv>=1.2.4",
+    "python-multipart>=0.0.32",
+]
+
+# One extra per runtime environment; exactly one is installed per venv.
+# torchaudio stopped publishing releases past 2.11.0 on every index, so it
+# stays there while torch moves on.
+[project.optional-dependencies]
+# Turing (sm_75) and newer: cu130 torch + faster-whisper (CTranslate2).
+nvidia = ["torch==2.14.1", "torchaudio==2.11.0"]
+# Maxwell/Pascal/Volta (e.g. Quadro M4000/P2200). PyTorch keeps the cu126
+# wheel line as its designated "legacy" build that still ships sm_50+
+# kernels, which cu128/cu130 dropped -- see
+# https://github.com/pytorch/pytorch/issues/178665. CTranslate2's prebuilt
+# wheels separately lack kernels for these architectures, so this
+# environment transcribes with openai-whisper (plain PyTorch) instead.
+nvidia-legacy = ["torch==2.14.1", "torchaudio==2.11.0", "openai-whisper==20250625"]
+# triton-xpu / triton-rocm are listed only so [tool.uv.sources] can route
+# them to the PyTorch index (uv requires a sourced package to be a direct
+# dependency of the extra); torch itself pins their version.
+intel = ["torch==2.14.1", "torchaudio==2.11.0", "openai-whisper==20250625", "triton-xpu"]
+amd = ["torch==2.14.1", "torchaudio==2.11.0", "openai-whisper==20250625", "triton-rocm"]
+cpu = ["torch==2.14.1", "torchaudio==2.11.0"]
+
+[tool.uv]
+# Images are built for linux/amd64 only; local development on other
+# platforms goes through Docker or WSL.
+environments = ["sys_platform == 'linux' and platform_machine == 'x86_64'"]
+conflicts = [
+    [
+        { extra = "nvidia" },
+        { extra = "nvidia-legacy" },
+        { extra = "intel" },
+        { extra = "amd" },
+        { extra = "cpu" },
+    ],
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu130", extra = "nvidia" },
+    { index = "pytorch-cu126", extra = "nvidia-legacy" },
+    { index = "pytorch-xpu", extra = "intel" },
+    { index = "pytorch-rocm", extra = "amd" },
+    { index = "pytorch-cpu", extra = "cpu" },
+]
+torchaudio = [
+    { index = "pytorch-cu130", extra = "nvidia" },
+    { index = "pytorch-cu126", extra = "nvidia-legacy" },
+    { index = "pytorch-xpu", extra = "intel" },
+    { index = "pytorch-rocm", extra = "amd" },
+    { index = "pytorch-cpu", extra = "cpu" },
+]
+# Backend-specific triton builds torch pulls in; only published on the
+# PyTorch indexes, not on PyPI.
+triton-xpu = { index = "pytorch-xpu", extra = "intel" }
+triton-rocm = { index = "pytorch-rocm", extra = "amd" }
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-xpu"
+url = "https://download.pytorch.org/whl/xpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-rocm"
+url = "https://download.pytorch.org/whl/rocm7.2"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
