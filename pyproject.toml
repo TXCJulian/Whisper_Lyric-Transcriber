@@ -30,7 +30,10 @@ dependencies = [
 # stays there while torch moves on.
 [project.optional-dependencies]
 # Turing (sm_75) and newer: cu130 torch + faster-whisper (CTranslate2).
-nvidia = ["torch==2.14.1", "torchaudio==2.11.0"]
+# CTranslate2's CUDA build loads libcublas.so.12, but cu130 torch only ships
+# CUDA 13 libraries, hence the CUDA 12 cuBLAS (put on LD_LIBRARY_PATH by
+# docker/select-profile.sh).
+nvidia = ["torch==2.14.1", "torchaudio==2.11.0", "nvidia-cublas-cu12>=12.9"]
 # Maxwell/Pascal/Volta (e.g. Quadro M4000/P2200). PyTorch keeps the cu126
 # wheel line as its designated "legacy" build that still ships sm_50+
 # kernels, which cu128/cu130 dropped -- see

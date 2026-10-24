@@ -88,6 +88,18 @@ select_profile() {
         *) VENV_DIR=$_root/$RUNTIME_PROFILE ;;
     esac
 
+    # CTranslate2's CUDA build dlopen()s libcublas.so.12, while cu130 torch only
+    # ships CUDA 13 libraries -- the modern env adds nvidia-cublas-cu12 for it
+    # (the old nvidia/cuda:12.x base image provided it system-wide). Only for
+    # that env: LD_LIBRARY_PATH outranks RUNPATH, so it must never redirect
+    # the legacy env's torch to another CUDA build's libraries.
+    if [ "$VENV_DIR" = "$_root/nvidia" ]; then
+        for _dir in "$VENV_DIR"/lib/python3*/site-packages/nvidia/cublas/lib; do
+            [ -d "$_dir" ] && LD_LIBRARY_PATH=$_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+        done
+        export LD_LIBRARY_PATH
+    fi
+
     PATH=$VENV_DIR/bin:$PATH
     export RUNTIME_PROFILE VENV_DIR PATH
     echo "runtime profile: $RUNTIME_PROFILE ($_reason)" >&2
