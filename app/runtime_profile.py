@@ -17,3 +17,14 @@ def get_runtime_profile() -> str:
     if os.getenv("GPU_BACKEND", "").lower().strip() == "nvidia-legacy":
         return "nvidia-legacy"
     return ""
+
+
+def whisper_fp16_allowed() -> bool:
+    """Whether openai-whisper may run in fp16 (its CUDA default).
+
+    Not on the nvidia-legacy profile: Maxwell/Pascal consumer and Quadro
+    chips run fp16 math at a fraction of fp32 speed (or not at all), so it
+    buys nothing -- and fp16 GEMMs knocked a Quadro P2200 off the PCIe bus
+    (Xid 79) every time, while fp32 at higher clocks and power ran fine.
+    """
+    return get_runtime_profile() != "nvidia-legacy"
