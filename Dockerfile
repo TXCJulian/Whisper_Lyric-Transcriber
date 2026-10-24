@@ -34,8 +34,22 @@ FROM debian:trixie-20261020-slim AS base-cpu
 # the container. Debian's and Ubuntu 24.04's packaged versions are too old for
 # Battlemage (Arc B580) -- an old compute-runtime crashes encoding GPU
 # commands ("Abort was called ... command_encoder_xehp_and_later.inl").
-# Ubuntu 26.04's own archive ships compute-runtime 26.x, so no PPA is needed.
+# Ubuntu 26.04's own archive (compute-runtime 26.05) isn't enough either: on a
+# B580, torch-xpu's indexing kernels read garbage and Whisper decoding aborts
+# ("index out of bounds" / "numel: integer multiplication overflow"). The
+# runtime stage installs the current driver from Intel's PPA, per
+# https://dgpu-docs.intel.com/installation-guides/installing-packages-from-the-intel-ppa.html
 FROM ubuntu:26.04 AS base-intel
+# Launchpad signing key of ppa:kobuk-team/intel-graphics
+# (fingerprint 0C0E6AF955CE463C03FC51574D098D70AFBE5E1F).
+COPY docker/intel-graphics-ppa.asc /usr/share/keyrings/intel-graphics-ppa.asc
+# ca-certificates first: the PPA is served over HTTPS, and the bare image has
+# no CA bundle yet.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && echo "deb [signed-by=/usr/share/keyrings/intel-graphics-ppa.asc] https://ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu resolute main" \
+        > /etc/apt/sources.list.d/intel-graphics-ppa.list
 
 # ── Build stages: Python + virtual environments ─────────────────────────────
 FROM base-${GPU_BACKEND} AS builder
@@ -92,7 +106,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 # `upgrade` because the base image tag is pinned: without it, the weekly
 # no-cache rebuild would reinstall only the packages below and keep the
 # base's own (glibc, openssl, ...) at the pinned snapshot's versions.
-RUN apt-get update \
+# --error-on=any: an unreachable repository (e.g. Intel's PPA) must fail the
+# build, not silently fall back to older packages from the distro archive.
+RUN apt-get update --error-on=any \
     && apt-get upgrade -y \
     && apt-get install -y --no-install-recommends \
         ffmpeg \
