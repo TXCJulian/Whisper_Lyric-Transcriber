@@ -214,6 +214,17 @@ class BatchManagerTests(unittest.TestCase):
         with zipfile.ZipFile(io.BytesIO(self.manager.zip_results(batch.id))) as z:
             self.assertEqual(set(z.namelist()), {"x/x.lrc", "x (2)/x.lrc"})
 
+    def test_listing_evicts_expired_batches(self):
+        # A finished batch must expire even if no other batch is ever started.
+        batch = self.wait_ended(self.start(self.songs("01.flac")).id)
+        job_id = batch.items[0].job_id
+        batch.completed_at = (
+            datetime.now(timezone.utc) - timedelta(seconds=jm.JOB_TTL_SECONDS + 60)
+        ).isoformat()
+        self.assertEqual(self.manager.list_batches(), [])
+        self.assertIsNone(self.manager.get(batch.id))
+        self.assertIsNone(self.jobs.get_job(job_id))
+
     def test_eviction_removes_batch_and_jobs(self):
         batch = self.wait_ended(self.start(self.songs("01.flac")).id)
         job_id = batch.items[0].job_id

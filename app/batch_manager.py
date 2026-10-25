@@ -142,10 +142,14 @@ class BatchManager:
         return batch
 
     def get(self, batch_id: str) -> Batch | None:
+        # Evict on reads too: otherwise a finished batch would only expire
+        # when another batch is created or finishes.
+        self.evict_old()
         with self._lock:
             return self._batches.get(batch_id)
 
     def list_batches(self) -> list[Batch]:
+        self.evict_old()
         with self._lock:
             return list(reversed(self._batches.values()))
 

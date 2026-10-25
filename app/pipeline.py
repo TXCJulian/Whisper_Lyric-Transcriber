@@ -45,65 +45,63 @@ def run_full_pipeline(
         report("Separating vocals...")
         vocals_path = separate_vocals(input_path, output_dir, model_name=demucs_model)
 
-    # Free GPU memory from separation before loading Whisper
-    if not no_separation:
-        unload_separation_model()
+    try:
+        # Free GPU memory from separation before loading Whisper
+        if not no_separation:
+            unload_separation_model()
 
-    # Step 2: Transcription
-    report("Transcribing audio")
-    # Resolve artist/title for both transcription prompt and Genius lookup
-    file_artist, file_title = get_metadata_from_file(input_path)
-    lookup_artist = artist or file_artist
-    lookup_title = title or file_title
+        # Step 2: Transcription
+        report("Transcribing audio")
+        # Resolve artist/title for both transcription prompt and Genius lookup
+        file_artist, file_title = get_metadata_from_file(input_path)
+        lookup_artist = artist or file_artist
+        lookup_title = title or file_title
 
-    segments, detected_lang = get_engine().transcribe(
-        vocals_path,
-        model_size=whisper_model,
-        language=language,
-        artist=lookup_artist,
-        title=lookup_title,
-        language_callback=lambda lang: report(f"Detected language: {lang}"),
-    )
+        segments, detected_lang = get_engine().transcribe(
+            vocals_path,
+            model_size=whisper_model,
+            language=language,
+            artist=lookup_artist,
+            title=lookup_title,
+            language_callback=lambda lang: report(f"Detected language: {lang}"),
+        )
 
-    # Check if any vocals were detected
-    has_content = any(seg.text.strip() for seg in segments)
-    if not has_content:
-        logger.warning("No vocals detected in audio, skipping output file creation")
-        if warning_callback:
-            warning_callback("No vocals detected in audio")
-        report("Complete - no vocals detected")
-        # Clean up temporary vocals file
-        if not no_separation and os.path.exists(vocals_path) and vocals_path != input_path:
+        # Check if any vocals were detected
+        has_content = any(seg.text.strip() for seg in segments)
+        if not has_content:
+            logger.warning("No vocals detected in audio, skipping output file creation")
+            if warning_callback:
+                warning_callback("No vocals detected in audio")
+            report("Complete - no vocals detected")
+            return []
+
+        # Step 3: Lyrics correction
+        if not no_correction:
+            report("Correcting lyrics via Genius")
+
+            if lookup_artist and lookup_title:
+                genius_lyrics = fetch_genius_lyrics(lookup_artist, lookup_title)
+                if genius_lyrics:
+                    segments = correct_transcription(
+                        segments,
+                        genius_lyrics,
+                        min_match=resolve_min_match(correction_min_match),
+                        warning_callback=warning_callback,
+                    )
+                else:
+                    logger.warning("No Genius lyrics found, skipping correction")
+            else:
+                logger.warning("No artist/title available for Genius lookup, skipping correction")
+
+        # Step 4: Write output files
+        report("Writing output files...")
+        output_files = write_output_files(segments, output_dir, stem, format)
+
+        report("Complete")
+        return output_files
+    finally:
+        # The separated vocals are temporary (tens of MB); remove them on every
+        # outcome -- failed batch songs are kept until their batch expires.
+        if not no_separation and vocals_path != input_path and os.path.exists(vocals_path):
             os.remove(vocals_path)
             logger.info(f"Cleaned up temporary vocals file: {vocals_path}")
-        return []
-
-    # Step 3: Lyrics correction
-    if not no_correction:
-        report("Correcting lyrics via Genius")
-
-        if lookup_artist and lookup_title:
-            genius_lyrics = fetch_genius_lyrics(lookup_artist, lookup_title)
-            if genius_lyrics:
-                segments = correct_transcription(
-                    segments,
-                    genius_lyrics,
-                    min_match=resolve_min_match(correction_min_match),
-                    warning_callback=warning_callback,
-                )
-            else:
-                logger.warning("No Genius lyrics found, skipping correction")
-        else:
-            logger.warning("No artist/title available for Genius lookup, skipping correction")
-
-    # Step 4: Write output files
-    report("Writing output files...")
-    output_files = write_output_files(segments, output_dir, stem, format)
-
-    # Clean up temporary vocals file
-    if not no_separation and os.path.exists(vocals_path) and vocals_path != input_path:
-        os.remove(vocals_path)
-        logger.info(f"Cleaned up temporary vocals file: {vocals_path}")
-
-    report("Complete")
-    return output_files
