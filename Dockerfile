@@ -27,6 +27,11 @@ FROM debian:trixie-20261020-slim AS base-nvidia
 ENV NVIDIA_VISIBLE_DEVICES=all \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
+# GPU_BACKEND=nvidia-legacy was its own image before the universal nvidia
+# image; still accepted so existing build configs keep working. It builds a
+# smaller legacy-only image (cu126 env only, always the nvidia-legacy profile).
+FROM base-nvidia AS base-nvidia-legacy
+
 FROM debian:trixie-20261020-slim AS base-amd
 FROM debian:trixie-20261020-slim AS base-cpu
 

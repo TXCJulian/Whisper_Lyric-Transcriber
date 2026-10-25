@@ -301,7 +301,7 @@ Compose files live in `deploy/compose/`. The base `docker-compose.yml` contains 
 - **Port**: `3334`
 - **Volume**: `model-cache` persists downloaded model weights (~5 GB) across container restarts
 - **Restart**: `unless-stopped`
-- **Build arg**: `GPU_BACKEND` selects the image variant (`nvidia`, `intel`, `amd`, `cpu`)
+- **Build arg**: `GPU_BACKEND` selects the image variant (`nvidia`, `intel`, `amd`, `cpu`). The old value `nvidia-legacy` still builds: a smaller image with only the Maxwell/Pascal/Volta environment
 
 #### GPU Device Passthrough
 
