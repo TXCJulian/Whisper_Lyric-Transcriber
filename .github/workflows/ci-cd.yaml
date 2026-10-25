@@ -36,8 +36,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      # setup-uv publishes no moving major tag; Dependabot bumps the pin.
       - name: Set up uv
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@v10.3.2
 
       # The tests fake the model loaders and numpy, so they need only the
       # stdlib -- no torch download, no GPU.
