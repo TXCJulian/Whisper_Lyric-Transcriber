@@ -225,6 +225,20 @@ class BatchManagerTests(unittest.TestCase):
         self.assertIsNone(self.manager.get(batch.id))
         self.assertIsNone(self.jobs.get_job(job_id))
 
+    def test_zip_entries_cannot_escape_extraction_dir(self):
+        # '...flac' has the stem '..'; a backslash is a path separator for
+        # Windows extractors. Neither may produce a Zip Slip entry.
+        batch = self.wait_ended(self.start(self.songs("A/...flac", "A/x\\y.flac")).id)
+        with zipfile.ZipFile(io.BytesIO(self.manager.zip_results(batch.id))) as z:
+            names = z.namelist()
+        self.assertEqual(len(names), 2)
+        for name in names:
+            with self.subTest(name=name):
+                self.assertNotIn("\\", name)
+                self.assertFalse(name.startswith("/"))
+                self.assertNotIn("..", name.split("/"))
+                self.assertNotIn(".", name.split("/"))
+
     def test_eviction_removes_batch_and_jobs(self):
         batch = self.wait_ended(self.start(self.songs("01.flac")).id)
         job_id = batch.items[0].job_id

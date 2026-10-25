@@ -65,6 +65,16 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _zip_safe_name(name: str) -> str:
+    """One safe ZIP path component: no separators (a backslash is one for
+    Windows extractors) and never '.'/'..' -- song names like '...flac' would
+    otherwise yield Zip Slip entries such as '../x.lrc'."""
+    name = name.replace("/", "_").replace("\\", "_").strip()
+    if not name.strip("."):
+        name = "_" + name
+    return name
+
+
 def targets_exist(source: Path, format: str) -> bool:
     """Whether every lyrics file *format* produces already exists next to *source*."""
     return all(
@@ -186,12 +196,13 @@ class BatchManager:
                 job = self.job_manager.get_job(item.job_id) if item.job_id else None
                 if not job or job.status != JobStatus.completed or not job.result:
                     continue
-                stem = Path(item.path).stem
+                stem = _zip_safe_name(Path(item.path).stem)
                 folders[stem] = folders.get(stem, 0) + 1
                 folder = stem if folders[stem] == 1 else f"{stem} ({folders[stem]})"
                 for file_path in job.result:
                     if os.path.exists(file_path):
-                        zf.write(file_path, f"{folder}/{os.path.basename(file_path)}")
+                        name = _zip_safe_name(os.path.basename(file_path))
+                        zf.write(file_path, f"{folder}/{name}")
                         count += 1
         return buffer.getvalue() if count else None
 
