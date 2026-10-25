@@ -23,8 +23,8 @@ def whisper_fp16_allowed() -> bool:
     """Whether openai-whisper may run in fp16 (its CUDA default).
 
     Not on the nvidia-legacy profile: Maxwell/Pascal consumer and Quadro
-    chips run fp16 math at a fraction of fp32 speed (or not at all), so it
-    buys nothing -- and fp16 GEMMs knocked a Quadro P2200 off the PCIe bus
-    (Xid 79) every time, while fp32 at higher clocks and power ran fine.
+    chips run fp16 math at a fraction of fp32 speed (or not at all). On a
+    Quadro P2200 (5 GB), fp32 transcribed 2.6x faster than fp16 (medium),
+    and large-v3-turbo only fit in VRAM in fp32 -- fp16 ran out of memory.
     """
     return get_runtime_profile() != "nvidia-legacy"
