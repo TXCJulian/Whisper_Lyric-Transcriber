@@ -6,7 +6,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, UploadFile, Response
 from fastapi.responses import FileResponse, StreamingResponse
-from dotenv import load_dotenv
 
 from app.models import (
     OutputFormat,
@@ -43,7 +42,6 @@ from app.batch_manager import BatchManager
 from app.runtime_profile import get_runtime_profile
 from app.version import get_version_info
 
-load_dotenv()
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(name)s] %(levelname)s: %(message)s"
 )
