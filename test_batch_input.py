@@ -11,7 +11,7 @@ from app.batch_input import (
     list_directory_audio,
     parse_csv_paths,
 )
-from app.paths import PathNotAllowed
+from app.paths import PathNotAllowed, resolve_allowed_path
 
 
 class BatchInputTests(unittest.TestCase):
@@ -103,6 +103,27 @@ class BatchInputTests(unittest.TestCase):
             with self.subTest(directory=directory), self.assertRaises(BatchInputError) as ctx:
                 collect_batch_paths(directory, csv_content, recursive=False)
             self.assertEqual(ctx.exception.code, "invalid_batch_request")
+
+    def test_directory_scan_stops_once_over_limit(self):
+        # The limit is a resource guard: a huge library must not be walked to the end.
+        big = self.root / "big"
+        big.mkdir()
+        for i in range(10):
+            (big / f"{i:02d}.flac").write_bytes(b"x")
+        import app.batch_input as batch_input
+
+        calls = []
+
+        def counting(path, roots=None):
+            calls.append(path)
+            return resolve_allowed_path(path, roots)
+
+        with patch.object(config, "MAX_BATCH_SIZE", 2), \
+                patch.object(batch_input, "resolve_allowed_path", counting), \
+                self.assertRaises(BatchInputError) as ctx:
+            list_directory_audio(str(big), recursive=True, roots=self.roots)
+        self.assertEqual(ctx.exception.code, "invalid_batch_request")
+        self.assertLessEqual(len(calls), 4)  # the folder + at most 3 songs
 
     def test_collect_enforces_max_size(self):
         with patch.object(config, "MAX_BATCH_SIZE", 2), self.assertRaises(BatchInputError) as ctx:

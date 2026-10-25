@@ -55,6 +55,14 @@ class ResolveAllowedPathTests(unittest.TestCase):
         with self.assertRaises(PathNotAllowed):
             resolve_allowed_path(str(sibling / "a.flac"), [self.root])
 
+    def test_symlink_loop_is_path_error(self):
+        # Since Python 3.13 resolve(strict=True) raises OSError (ELOOP) for
+        # loops, which must surface as a path error, not a 500.
+        self.symlink(self.root / "a", self.root / "b")
+        self.symlink(self.root / "b", self.root / "a")
+        with self.assertRaises(PathNotFound):
+            resolve_allowed_path(str(self.root / "a" / "x.flac"), [self.root])
+
     def test_missing_path(self):
         with self.assertRaises(PathNotFound) as ctx:
             resolve_allowed_path(str(self.root / "missing.flac"), [self.root])

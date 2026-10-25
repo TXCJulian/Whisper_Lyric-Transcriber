@@ -37,22 +37,30 @@ def list_directory_audio(
         raise BatchInputError("invalid_batch_request", f"Not a directory: {directory}")
 
     candidates = folder.rglob("*") if recursive else folder.iterdir()
-    songs: list[Path] = []
+    songs: list[tuple[str, Path]] = []  # (sort key, resolved path)
     for entry in candidates:
         if not _is_audio(entry):
             continue
         # A symlinked file pointing outside the roots is rejected the same way
         # as such a path in a CSV.
         resolved = resolve_allowed_path(str(entry), roots)
-        if resolved.is_file():
-            songs.append(entry)
+        if not resolved.is_file():
+            continue
+        songs.append((entry.relative_to(folder).as_posix().casefold(), resolved))
+        # Stop as soon as the limit is exceeded instead of walking a whole
+        # library first.
+        if len(songs) > config.MAX_BATCH_SIZE:
+            raise BatchInputError(
+                "invalid_batch_request",
+                f"Directory has more than {config.MAX_BATCH_SIZE} songs, the batch limit",
+            )
 
     if not songs:
         raise BatchInputError(
             "invalid_batch_request", f"No audio files in directory: {directory}"
         )
-    songs.sort(key=lambda p: p.relative_to(folder).as_posix().casefold())
-    return [resolve_allowed_path(str(p), roots) for p in songs]
+    songs.sort(key=lambda song: song[0])
+    return [resolved for _, resolved in songs]
 
 
 def parse_csv_paths(content: bytes, roots: list[Path] | None = None) -> list[Path]:
