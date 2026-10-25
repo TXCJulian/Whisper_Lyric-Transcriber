@@ -40,10 +40,10 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v10.3.2
 
-      # The tests fake the model loaders and numpy, so they need only the
-      # stdlib -- no torch download, no GPU.
+      # The route/OpenAPI tests import FastAPI and the app, so the tests run in
+      # the small cpu environment (cpu torch, no GPU, no model downloads).
       - name: Run unit tests
-        run: uv run --no-project --python 3.14 python -m unittest discover -v
+        run: uv run --frozen --extra cpu python -m unittest discover -v
 
   meta:
     name: Compute version and build number
