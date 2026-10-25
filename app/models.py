@@ -15,6 +15,23 @@ class JobStatus(str, Enum):
     failed = "failed"
 
 
+class ItemStatus(str, Enum):
+    pending = "pending"
+    processing = "processing"
+    completed = "completed"
+    failed = "failed"
+    skipped = "skipped"
+    cancelled = "cancelled"
+
+
+class BatchStatus(str, Enum):
+    pending = "pending"
+    processing = "processing"
+    completed = "completed"
+    failed = "failed"
+    cancelled = "cancelled"
+
+
 class JobResponse(BaseModel):
     job_id: str
 
