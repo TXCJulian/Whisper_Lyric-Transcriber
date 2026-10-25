@@ -48,3 +48,12 @@ nodes. Two common ways around it:
 Either way, failover between nodes needs the model cache on storage every node can
 reach: replace the ReadWriteOnce PVC with a ReadWriteMany storage class (e.g. NFS), or
 accept a fresh ~5 GB model download on the new node.
+
+## Batch processing
+
+To let `POST /batch` read songs from your library, mount it into the pod and point
+`TRANSCRIBER_ALLOWED_ROOTS` at the mount path — commented examples for the volume, the
+mount and the env vars are in `base/deployment.yaml`. A read-only mount is enough for the
+default `TRANSCRIBER_BATCH_OUTPUT=download`; `alongside` writes lyrics next to the songs
+and needs a writable volume. Batches live in the pod's memory, like jobs: a restart or a
+failover to another node loses running batches, so the client should restart them.

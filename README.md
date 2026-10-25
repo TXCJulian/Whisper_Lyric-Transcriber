@@ -119,11 +119,13 @@ curl http://localhost:3334/health
 
 All processing endpoints are asynchronous — they return a `job_id` immediately. Poll the job status endpoint until completion, then download results.
 
+Interactive documentation of every endpoint, field and response is served at **`/docs`** (Swagger UI) and **`/redoc`**.
+
 ### Health
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/health` | Service status, running version/build/commit and image variant (`version`), the environment the image chose at start (`runtime_profile`: `nvidia`, `nvidia-legacy`, `intel`, `amd` or `cpu`), GPU backend/name, transcription engine, total VRAM, and per-model VRAM fit (`whisper_model_fit`) so callers can rule out model sizes too large for the GPU |
+| `GET` | `/health` | Service status, running version/build/commit and image variant (`version`), the environment the image chose at start (`runtime_profile`: `nvidia`, `nvidia-legacy`, `intel`, `amd` or `cpu`), GPU backend/name, transcription engine, total VRAM, per-model VRAM fit (`whisper_model_fit`) so callers can rule out model sizes too large for the GPU, the default correction threshold (`correction_min_match`) and batch settings (`batch`) |
 
 ### Processing Endpoints
 
@@ -142,6 +144,7 @@ All accept `multipart/form-data` and return `{"job_id": "<id>"}`.
 | `artist` | string | from metadata | Artist name for Genius lookup (overrides audio metadata) |
 | `title` | string | from metadata | Song title for Genius lookup (overrides audio metadata) |
 | `no_correction` | bool | `false` | Skip Genius lyrics correction |
+| `correction_min_match` | number 0–100 | `CORRECTION_MIN_MATCH` | Keep the Whisper text if the Genius lyrics match less than this percentage (see [How Lyrics Correction Works](#how-lyrics-correction-works)) |
 
 #### `POST /separate` — Vocal Separation Only
 
@@ -169,15 +172,16 @@ Returns the isolated vocals as a `.wav` file.
 | `artist` | string | *(required)* | Artist name for Genius lookup |
 | `title` | string | *(required)* | Song title for Genius lookup |
 | `format` | string | `lrc` | Output format |
+| `correction_min_match` | number 0–100 | `CORRECTION_MIN_MATCH` | Keep the Whisper text below this Genius match percentage |
 
 ### Job Management
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/jobs/{job_id}` | Job status (`pending` / `processing` / `completed` / `failed`), progress message, errors, warnings |
+| `GET` | `/jobs/{job_id}` | Job status (`pending` / `processing` / `completed` / `failed`), progress message, error, and warnings (`warnings` lists all of them; `warning` keeps the most recent) |
 | `GET` | `/jobs/{job_id}/result` | Download result — single file directly, multiple files as ZIP, `204` if no output |
 | `GET` | `/jobs/{job_id}/result/info` | Result file metadata without downloading |
-| `DELETE` | `/jobs/{job_id}` | Delete job and its files (`409` if still processing) |
+| `DELETE` | `/jobs/{job_id}` | Delete job and its files (`409` if still processing, or if the job belongs to a batch — delete the batch instead) |
 
 ### Usage Example
 
@@ -191,6 +195,63 @@ curl http://localhost:3334/jobs/$JOB_ID
 # Download result
 curl -o lyrics.lrc http://localhost:3334/jobs/$JOB_ID/result
 ```
+
+## Batch Processing
+
+Transcribe a whole album — or any list of songs — as **one batch** that runs on the server, independent of the client. The transcriber reads the songs directly from storage mounted into the container, so nothing is uploaded.
+
+### Setup
+
+1. Mount your music library into the container, e.g. `-v /srv/music:/music:ro`.
+2. Set `TRANSCRIBER_ALLOWED_ROOTS=/music`. Batch requests may only read inside these directories (comma-separated); every path is fully resolved (`..`, symlinks) before the check. Without this variable the batch endpoints answer `403 batch_disabled`.
+3. Choose where results go with `TRANSCRIBER_BATCH_OUTPUT`:
+   - `download` (default) — results stay in the transcriber and are downloaded per song or as one ZIP. A read-only mount is enough.
+   - `alongside` — additionally write `<song>.lrc` / `<song>.txt` next to each song. Needs a writable mount. Existing lyrics files are never overwritten while `skip_existing` is on (the default); such songs are reported as `skipped`.
+
+### Starting a batch
+
+```bash
+# A folder (one album); add -F recursive=true to include subfolders
+curl -s -F "directory=/music/Artist/Album" http://localhost:3334/batch
+# -> {"batch_id": "3f9c1a2b7d4e", "total": 12}
+
+# A CSV with one path per line (optional "path" header; quote paths containing commas)
+cat > songs.csv <<'EOF'
+path
+/music/A/01 Song.flac
+"/music/B/02 Illegal, legal.flac"
+EOF
+curl -s -F "csv=@songs.csv" http://localhost:3334/batch
+```
+
+`POST /batch` accepts the same options as `/transcribe` (`format`, `no_separation`, `demucs_model`, `whisper_model`, `language`, `no_correction`, `correction_min_match`) plus `directory` **or** `csv`, `recursive` and `skip_existing`. Artist and title for Genius come from each file's tags. Songs run one after another, sharing the GPU queue with single jobs. A CSV with any invalid line is rejected as a whole, listing every bad line.
+
+### Following and collecting a batch
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/batches` | All batches, newest first, with per-status counts |
+| `GET` | `/batches/{batch_id}` | Batch status and per-song `status` (`pending`, `processing`, `completed`, `failed`, `skipped`, `cancelled`), progress, warnings, result files and the song's `job_id` |
+| `GET` | `/batches/{batch_id}/result` | ZIP of all finished results, one folder per song (works while the batch is running; `204` if nothing yet) |
+| `POST` | `/batches/{batch_id}/cancel` | Stop the batch but keep it: waiting songs are cancelled, a running song finishes, finished results stay downloadable |
+| `DELETE` | `/batches/{batch_id}` | Cancel and remove the batch and its results (`202` with `status: cancelling` while a song is still running). Files written next to songs are kept |
+
+Each song is also a regular job, so `GET /jobs/{job_id}` and `/jobs/{job_id}/result` work for single songs. Batches expire like jobs, `JOB_TTL_SECONDS` after they end.
+
+### Batch errors
+
+Batch errors carry a machine-readable code: `{"detail": {"code": "...", "message": "...", ...}}`.
+
+| Status | Code | Meaning |
+| --- | --- | --- |
+| 403 | `batch_disabled` | `TRANSCRIBER_ALLOWED_ROOTS` is not set |
+| 403 | `path_not_allowed` | The path resolves outside the allowed roots |
+| 404 | `path_not_found` | The directory doesn't exist |
+| 404 | `batch_not_found` | Unknown, deleted or expired batch |
+| 409 | `batch_finished` | Cancel on a batch that has already ended |
+| 409 | `job_in_batch` | `DELETE /jobs/{id}` on a song of a batch |
+| 422 | `invalid_batch_request` | Neither or both of `directory`/`csv`, no audio files found, or more than 5000 songs |
+| 422 | `invalid_csv` | Invalid CSV lines, listed in `errors: [{line, path, reason}]` |
 
 ## Output Formats
 
@@ -227,6 +288,9 @@ Da kann man nichts machen
 | `DEMUCS_SEGMENT_SECONDS` | model default | Override the chunk length `apply_model()` uses to split long tracks; lower it if you hit GPU OOM on very long tracks |
 | `JOBS_DIR` | `/app/jobs` | Base directory for job input/output files |
 | `GPU_BACKEND` | auto-detect | Usually leave unset. `nvidia-legacy` forces the Maxwell/Pascal/Volta environment and `cpu` forces CPU; `nvidia`/`cuda` (or unset) let the `nvidia` image pick by GPU generation. Outside Docker it also accepts `xpu`/`intel` and `rocm`/`amd`. With Docker Compose, set `RUNTIME_GPU_BACKEND` instead, because compose uses `GPU_BACKEND` to choose which image variant to build |
+| `TRANSCRIBER_ALLOWED_ROOTS` | *(empty)* | Comma-separated directories batch requests may read from. Empty disables batch processing (see [Batch Processing](#batch-processing)) |
+| `TRANSCRIBER_BATCH_OUTPUT` | `download` | Where batch results go: `download` (kept for download only) or `alongside` (also written next to each song; needs write access) |
+| `CORRECTION_MIN_MATCH` | `0` | Genius correction threshold in percent: below it the Genius lyrics are discarded and the Whisper transcription is kept. `0` always applies the correction |
 | `PUID` | `1000` | UID the container process runs as (container runs as a non-root `appuser`) |
 | `PGID` | `1000` | GID the container process runs as |
 
@@ -272,6 +336,12 @@ Start the server:
 uv run uvicorn app.main:app --host 0.0.0.0 --port 3334
 ```
 
+Run the tests (no GPU or models needed; they use the `cpu` environment):
+
+```bash
+uv run --extra cpu python -m unittest discover -v
+```
+
 With the `nvidia-legacy` extra, also set `GPU_BACKEND=nvidia-legacy` so the app uses the OpenAI Whisper engine. Inside Docker the entrypoint does this for you. `GPU_BACKEND=cpu` forces CPU.
 
 ## Project Structure
@@ -291,6 +361,12 @@ With the `nvidia-legacy` extra, also set `GPU_BACKEND=nvidia-legacy` so the app 
     ├── main.py             # FastAPI app, route handlers, startup logic
     ├── version.py          # Version/build/commit reported by /health
     ├── runtime_profile.py  # Runtime profile chosen by the entrypoint
+    ├── config.py           # Batch/threshold settings from the environment
+    ├── paths.py            # TRANSCRIBER_ALLOWED_ROOTS path checks
+    ├── batch_input.py      # Song lists from a directory or a CSV
+    ├── batch_manager.py    # Batches: song queue, cancel/delete, alongside output, ZIP
+    ├── batch_routes.py     # /batch and /batches endpoints
+    ├── api_docs.py         # OpenAPI texts shared by the endpoints
     ├── models.py           # Pydantic request/response models
     ├── job_manager.py      # Async job queue with threading, TTL eviction
     ├── pipeline.py         # Orchestrates separation → transcription → correction
@@ -313,6 +389,8 @@ The correction step uses `difflib.SequenceMatcher` to align words between the Wh
 - **Capitalization**: Mid-line words that Genius incorrectly capitalizes (line-start convention) are lowercased
 
 Artist and title for the Genius lookup are read from audio metadata tags (via mutagen). Use the `artist` and `title` form fields to override if metadata is missing.
+
+**Correction threshold:** the match rate is the share of aligned words that Whisper and Genius agree on exactly. When Genius returns lyrics for a different version of the song — a dub in another language, a live version, a remix — the rate drops, and applying them would rewrite correct lines with the wrong text. Set `CORRECTION_MIN_MATCH` (or `correction_min_match` per request) to a percentage such as `30`: below it the Genius lyrics are discarded, the Whisper transcription is kept, and the job gets a warning like `Genius lyrics matched only 10.5 % (threshold 30 %): kept the Whisper transcription`. The default `0` always applies the correction.
 
 ## Tech Stack
 

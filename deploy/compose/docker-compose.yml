@@ -34,10 +34,19 @@ services:
       - GPU_BACKEND=${RUNTIME_GPU_BACKEND:-}
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
+      # Batch processing (POST /batch): directories it may read songs from,
+      # and where results go (download | alongside). Mount the library below.
+      - TRANSCRIBER_ALLOWED_ROOTS=${TRANSCRIBER_ALLOWED_ROOTS:-}
+      - TRANSCRIBER_BATCH_OUTPUT=${TRANSCRIBER_BATCH_OUTPUT:-download}
+      # Genius correction threshold in percent (0 = always correct)
+      - CORRECTION_MIN_MATCH=${CORRECTION_MIN_MATCH:-0}
     ports:
       - "3334:3334"
     volumes:
       - model-cache:/app/models
+      # Music library for batch processing; set TRANSCRIBER_ALLOWED_ROOTS=/music.
+      # :ro is enough for TRANSCRIBER_BATCH_OUTPUT=download; alongside needs write access.
+      # - /path/to/music:/music:ro
 
 volumes:
   model-cache:

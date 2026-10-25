@@ -35,11 +35,23 @@ spec:
               value: "true"
             - name: JOB_TTL_SECONDS
               value: "3600"
+            # Batch processing (POST /batch) — uncomment together with the
+            # music volume below. alongside output needs a writable volume.
+            # - name: TRANSCRIBER_ALLOWED_ROOTS
+            #   value: /music
+            # - name: TRANSCRIBER_BATCH_OUTPUT
+            #   value: download
+            # Genius correction threshold in percent (0 = always correct)
+            # - name: CORRECTION_MIN_MATCH
+            #   value: "0"
           volumeMounts:
             - name: models
               mountPath: /app/models
             - name: jobs
               mountPath: /app/jobs
+            # - name: music
+            #   mountPath: /music
+            #   readOnly: true
           # First start downloads ~5 GB of models before the server answers.
           startupProbe:
             httpGet:
@@ -71,3 +83,7 @@ spec:
             claimName: lyric-transcriber-models
         - name: jobs
           emptyDir: {}
+        # Your music library, e.g. an NFS share or an existing PVC:
+        # - name: music
+        #   persistentVolumeClaim:
+        #     claimName: music-library
