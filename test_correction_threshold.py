@@ -69,10 +69,11 @@ class CorrectionThresholdTests(unittest.TestCase):
 
     def test_routes_validate_threshold_range(self):
         from fastapi.testclient import TestClient
+        import app.job_manager as jm
         import app.main as main
 
         client = TestClient(main.app)
-        with patch.object(main.job_manager, "submit") as submit:
+        with tempfile.TemporaryDirectory() as jobs_dir,                 patch.object(jm, "JOBS_BASE_DIR", jobs_dir),                 patch.object(main, "job_manager", jm.JobManager()),                 patch.object(main.job_manager, "submit") as submit:
             for path, extra in (("/transcribe", {}), ("/correct", {"artist": "a", "title": "t"})):
                 with self.subTest(path=path):
                     bad = client.post(path, files={"file": ("s.flac", b"x")},

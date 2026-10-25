@@ -57,7 +57,8 @@ class JobManager:
         self._jobs: OrderedDict[str, Job] = OrderedDict()
         self._lock = threading.Lock()
         self._semaphore = threading.Semaphore(max_workers)
-        os.makedirs(JOBS_BASE_DIR, exist_ok=True)
+        # JOBS_BASE_DIR is created with the first job (create_job), not at
+        # import -- importing the app must not need write access to it.
 
     def create_job(self, batch_id: str | None = None) -> Job:
         """Create a new job with its directories. Call submit() or run() to start it."""
