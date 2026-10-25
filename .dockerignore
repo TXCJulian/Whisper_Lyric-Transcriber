@@ -1,0 +1,13 @@
+.git
+.github
+.venv
+.claude
+.worktrees
+.superpowers
+.playwright-mcp
+.pytest_cache
+**/__pycache__
+.env
+deploy
+docs
+*.md

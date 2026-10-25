@@ -1,5 +1,5 @@
 # AMD ROCm GPU override — passes through render and KFD devices
-# Usage: GPU_BACKEND=amd docker compose -f docker-compose.yml -f docker-compose.amd.yml up --build
+# Usage: GPU_BACKEND=amd docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.amd.yml --env-file .env up -d --build
 services:
   lyric-transcriber:
     devices:

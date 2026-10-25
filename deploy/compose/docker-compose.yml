@@ -1,0 +1,52 @@
+# Base service -- CPU only on its own. Add a GPU override file for your hardware.
+# Run from the repository root:
+#   NVIDIA (any generation, incl. Maxwell/Pascal/Volta):
+#     docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.nvidia.yml --env-file .env up -d --build
+#   Intel Arc:
+#     GPU_BACKEND=intel docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.intel.yml --env-file .env up -d --build
+#   AMD Radeon:
+#     GPU_BACKEND=amd docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.amd.yml --env-file .env up -d --build
+#   CPU only:
+#     GPU_BACKEND=cpu docker compose -f deploy/compose/docker-compose.yml --env-file .env up -d --build
+services:
+  lyric-transcriber:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args:
+        # Image variant to build: nvidia (default), intel, amd or cpu
+        GPU_BACKEND: ${GPU_BACKEND:-nvidia}
+    image: lyric-transcriber:latest
+    container_name: lyric-transcriber
+    restart: unless-stopped
+    environment:
+      - GENIUS_ACCESS_TOKEN=${GENIUS_ACCESS_TOKEN}
+      # Optional. A Hugging Face token lifts the anonymous download rate limit,
+      # which makes the first model download (~5 GB) noticeably faster. Leave
+      # unset to download anonymously.
+      - HF_TOKEN=${HF_TOKEN:-}
+      - PRELOAD_MODELS=true
+      - JOB_TTL_SECONDS=3600
+      # Optional runtime override. Unset lets the image pick the path itself
+      # (on NVIDIA: modern or legacy by GPU generation); nvidia-legacy or cpu
+      # force one. Use RUNTIME_GPU_BACKEND, not GPU_BACKEND -- GPU_BACKEND
+      # above selects the image variant at build time.
+      - GPU_BACKEND=${RUNTIME_GPU_BACKEND:-}
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
+      # Batch processing (POST /batch): directories it may read songs from,
+      # and where results go (download | alongside). Mount the library below.
+      - TRANSCRIBER_ALLOWED_ROOTS=${TRANSCRIBER_ALLOWED_ROOTS:-}
+      - TRANSCRIBER_BATCH_OUTPUT=${TRANSCRIBER_BATCH_OUTPUT:-download}
+      # Genius correction threshold in percent (0 = always correct)
+      - CORRECTION_MIN_MATCH=${CORRECTION_MIN_MATCH:-0}
+    ports:
+      - "3334:3334"
+    volumes:
+      - model-cache:/app/models
+      # Music library for batch processing; set TRANSCRIBER_ALLOWED_ROOTS=/music.
+      # :ro is enough for TRANSCRIBER_BATCH_OUTPUT=download; alongside needs write access.
+      # - /path/to/music:/music:ro
+
+volumes:
+  model-cache:

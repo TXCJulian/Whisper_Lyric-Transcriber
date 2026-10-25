@@ -24,6 +24,11 @@ class Job:
     progress: str | None = None
     error: str | None = None
     warning: str | None = None
+    # Every warning the task reported; `warning` keeps only the last one, as
+    # the API has always returned.
+    warnings: list[str] = field(default_factory=list)
+    # Set for songs of a batch: the batch owns the job's lifetime.
+    batch_id: str | None = None
     result: Any = None
     created_at: str = ""
     completed_at: str | None = None
@@ -39,17 +44,30 @@ class Job:
         return os.path.join(JOBS_BASE_DIR, self.id, "output")
 
 
+class JobInBatch(Exception):
+    """Raised when deleting a job that belongs to a batch."""
+
+    def __init__(self, batch_id: str):
+        super().__init__(f"Job belongs to batch {batch_id}")
+        self.batch_id = batch_id
+
+
 class JobManager:
     def __init__(self, max_workers: int = 1):
         self._jobs: OrderedDict[str, Job] = OrderedDict()
         self._lock = threading.Lock()
         self._semaphore = threading.Semaphore(max_workers)
-        os.makedirs(JOBS_BASE_DIR, exist_ok=True)
+        # JOBS_BASE_DIR is created with the first job (create_job), not at
+        # import -- importing the app must not need write access to it.
 
-    def create_job(self) -> Job:
-        """Create a new job with its directories. Call submit() to start it."""
+    def create_job(self, batch_id: str | None = None) -> Job:
+        """Create a new job with its directories. Call submit() or run() to start it."""
         job_id = uuid.uuid4().hex[:12]
-        job = Job(id=job_id, created_at=datetime.now(timezone.utc).isoformat())
+        job = Job(
+            id=job_id,
+            created_at=datetime.now(timezone.utc).isoformat(),
+            batch_id=batch_id,
+        )
         os.makedirs(job.input_dir, exist_ok=True)
         os.makedirs(job.output_dir, exist_ok=True)
         with self._lock:
@@ -58,12 +76,15 @@ class JobManager:
 
     def submit(self, job: Job, task_fn: Callable, **kwargs):
         """Submit a created job for processing."""
-        job.task_fn = task_fn
-        job.task_kwargs = kwargs
-        thread = threading.Thread(target=self._run_job, args=(job,), daemon=True)
+        thread = threading.Thread(
+            target=self.run, args=(job, task_fn), kwargs=kwargs, daemon=True
+        )
         thread.start()
 
-    def _run_job(self, job: Job):
+    def run(self, job: Job, task_fn: Callable, **kwargs):
+        """Run a created job in the calling thread (waits for the GPU slot)."""
+        job.task_fn = task_fn
+        job.task_kwargs = kwargs
         self._semaphore.acquire()
         try:
             if job.task_fn is None:
@@ -79,6 +100,7 @@ class JobManager:
             def warning_callback(msg: str):
                 with self._lock:
                     job.warning = msg
+                    job.warnings.append(msg)
 
             result = job.task_fn(
                 progress_callback=progress_callback,
@@ -109,9 +131,16 @@ class JobManager:
         with self._lock:
             return self._jobs.get(job_id)
 
-    def delete_job(self, job_id: str) -> bool:
-        """Delete a job and its files. Returns True if found and deleted."""
+    def delete_job(self, job_id: str, force: bool = False) -> bool:
+        """Delete a job and its files. Returns True if found and deleted.
+
+        Jobs owned by a batch raise JobInBatch unless *force* (used by the
+        batch manager when it removes the whole batch).
+        """
         with self._lock:
+            job = self._jobs.get(job_id)
+            if job is not None and job.batch_id and not force:
+                raise JobInBatch(job.batch_id)
             job = self._jobs.pop(job_id, None)
         if job is None:
             return False
@@ -132,7 +161,7 @@ class JobManager:
 
         with self._lock:
             for job_id, job in self._jobs.items():
-                if job.status not in ("completed", "failed"):
+                if job.status not in ("completed", "failed") or job.batch_id:
                     continue
                 if job.completed_at:
                     completed = datetime.fromisoformat(job.completed_at)
@@ -142,7 +171,8 @@ class JobManager:
 
             # Also enforce max count
             completed_jobs = [
-                j for j in self._jobs.values() if j.status in ("completed", "failed")
+                j for j in self._jobs.values()
+                if j.status in ("completed", "failed") and not j.batch_id
             ]
             if len(completed_jobs) > MAX_COMPLETED_JOBS:
                 excess = completed_jobs[: len(completed_jobs) - MAX_COMPLETED_JOBS]
