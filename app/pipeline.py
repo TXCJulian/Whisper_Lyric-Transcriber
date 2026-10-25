@@ -102,6 +102,11 @@ def run_full_pipeline(
     finally:
         # The separated vocals are temporary (tens of MB); remove them on every
         # outcome -- failed batch songs are kept until their batch expires.
+        # Best-effort: a failed removal must neither fail a successful job nor
+        # mask the error that ended a failed one.
         if not no_separation and vocals_path != input_path and os.path.exists(vocals_path):
-            os.remove(vocals_path)
-            logger.info(f"Cleaned up temporary vocals file: {vocals_path}")
+            try:
+                os.remove(vocals_path)
+                logger.info(f"Cleaned up temporary vocals file: {vocals_path}")
+            except OSError as e:
+                logger.warning(f"Could not remove temporary vocals file {vocals_path}: {e}")
