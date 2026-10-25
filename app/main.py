@@ -36,7 +36,8 @@ from app.gpu_backend import (
     get_whisper_model_fit,
     use_faster_whisper,
 )
-from app import config
+from app import batch_routes, config
+from app.batch_manager import BatchManager
 from app.runtime_profile import get_runtime_profile
 from app.version import get_version_info
 
@@ -84,6 +85,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+batch_routes.batch_manager = BatchManager(job_manager)
+app.include_router(batch_routes.router)
+
 
 # ── Health ──────────────────────────────────────────────────────────────────
 
@@ -101,6 +105,11 @@ def health():
         "vram_total_mb": vram["total_mb"] if vram else None,
         "whisper_model_fit": get_whisper_model_fit(vram),
         "correction_min_match": config.CORRECTION_MIN_MATCH,
+        "batch": {
+            "enabled": bool(config.ALLOWED_ROOTS),
+            "allowed_roots": [str(root) for root in config.ALLOWED_ROOTS],
+            "output_mode": config.BATCH_OUTPUT,
+        },
     }
 
 
