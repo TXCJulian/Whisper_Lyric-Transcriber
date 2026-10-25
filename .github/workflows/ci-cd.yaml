@@ -27,6 +27,23 @@ env:
   IMAGE: ghcr.io/txcjulian/whisper-lyric-transcriber
 
 jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10
+
+      # The tests fake the model loaders and numpy, so they need only the
+      # stdlib -- no torch download, no GPU.
+      - name: Run unit tests
+        run: uv run --no-project --python 3.14 python -m unittest discover -v
+
   meta:
     name: Compute version and build number
     runs-on: ubuntu-latest
@@ -73,7 +90,8 @@ jobs:
 
   docker-publish:
     name: Build and publish ${{ matrix.backend }}
-    needs: meta
+    # No image (beta or release) is pushed unless the unit tests pass.
+    needs: [test, meta]
     runs-on: ubuntu-latest
     permissions:
       contents: read
