@@ -25,6 +25,7 @@ class JobStatusResponse(BaseModel):
     progress: str | None = None
     error: str | None = None
     warning: str | None = None
+    warnings: list[str] = []
     created_at: str
     completed_at: str | None = None
 

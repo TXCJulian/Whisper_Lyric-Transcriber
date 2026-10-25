@@ -15,7 +15,7 @@ from app.models import (
     JobResultFile,
     JobResultResponse,
 )
-from app.job_manager import JobManager
+from app.job_manager import JobInBatch, JobManager
 from app.pipeline import run_full_pipeline
 from app.separation import (
     separate_vocals,
@@ -337,6 +337,7 @@ def get_job_status(job_id: str):
         progress=job.progress,
         error=job.error,
         warning=job.warning,
+        warnings=list(job.warnings),
         created_at=job.created_at,
         completed_at=job.completed_at,
     )
@@ -405,6 +406,17 @@ def delete_job(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     if job.status == "processing":
         raise HTTPException(status_code=409, detail="Cannot delete a processing job")
-    if not job_manager.delete_job(job_id):
+    try:
+        deleted = job_manager.delete_job(job_id)
+    except JobInBatch as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "job_in_batch",
+                "message": f"Job belongs to batch {e.batch_id}; delete the batch instead",
+                "batch_id": e.batch_id,
+            },
+        )
+    if not deleted:
         raise HTTPException(status_code=500, detail="Failed to delete job")
     return {"status": "deleted", "job_id": job_id}
