@@ -10,6 +10,7 @@ from app.separation import (
 from app.transcription import write_output_files
 from app.transcription_engine import get_engine
 from app.correction import get_metadata_from_file, fetch_genius_lyrics, correct_transcription
+from app.config import resolve_min_match
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ def run_full_pipeline(
     artist: str | None = None,
     title: str | None = None,
     no_correction: bool = False,
+    correction_min_match: float | None = None,
     progress_callback: Callable[[str], None] | None = None,
     warning_callback: Callable[[str], None] | None = None,
 ) -> list[str]:
@@ -83,7 +85,12 @@ def run_full_pipeline(
         if lookup_artist and lookup_title:
             genius_lyrics = fetch_genius_lyrics(lookup_artist, lookup_title)
             if genius_lyrics:
-                segments = correct_transcription(segments, genius_lyrics)
+                segments = correct_transcription(
+                    segments,
+                    genius_lyrics,
+                    min_match=resolve_min_match(correction_min_match),
+                    warning_callback=warning_callback,
+                )
             else:
                 logger.warning("No Genius lyrics found, skipping correction")
         else:

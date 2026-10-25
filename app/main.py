@@ -36,6 +36,7 @@ from app.gpu_backend import (
     get_whisper_model_fit,
     use_faster_whisper,
 )
+from app import config
 from app.runtime_profile import get_runtime_profile
 from app.version import get_version_info
 
@@ -99,6 +100,7 @@ def health():
         "transcription_engine": "faster-whisper" if use_faster_whisper() else "openai-whisper",
         "vram_total_mb": vram["total_mb"] if vram else None,
         "whisper_model_fit": get_whisper_model_fit(vram),
+        "correction_min_match": config.CORRECTION_MIN_MATCH,
     }
 
 
@@ -116,6 +118,7 @@ async def submit_transcribe(
     artist: str | None = Form(None),
     title: str | None = Form(None),
     no_correction: bool = Form(False),
+    correction_min_match: float | None = Form(None, ge=0, le=100),
 ):
     # Normalize empty strings to None (multipart forms send "" for omitted fields)
     language = language if language else None
@@ -144,6 +147,7 @@ async def submit_transcribe(
         artist=artist,
         title=title,
         no_correction=no_correction,
+        correction_min_match=correction_min_match,
     )
     return JobResponse(job_id=job.id)
 
@@ -250,6 +254,7 @@ async def submit_correct(
     artist: str = Form(...),
     title: str = Form(...),
     format: OutputFormat = Form(OutputFormat.lrc),
+    correction_min_match: float | None = Form(None, ge=0, le=100),
 ):
     """Correct an existing transcription using Genius lyrics.
 
@@ -291,7 +296,12 @@ async def submit_correct(
             )
 
         progress_callback("Applying correction...")
-        corrected = correct_transcription(segments, genius_lyrics)
+        corrected = correct_transcription(
+            segments,
+            genius_lyrics,
+            min_match=config.resolve_min_match(kwargs["correction_min_match"]),
+            warning_callback=warning_callback,
+        )
 
         stem = os.path.splitext(os.path.basename(kwargs["input_path"]))[0]
         output_files = write_output_files(
@@ -308,6 +318,7 @@ async def submit_correct(
         artist=artist,
         title=title,
         format=format.value,
+        correction_min_match=correction_min_match,
     )
     return JobResponse(job_id=job.id)
 
