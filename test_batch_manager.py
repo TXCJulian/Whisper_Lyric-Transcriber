@@ -183,6 +183,27 @@ class BatchManagerTests(unittest.TestCase):
         self.assertTrue(all(Path(f).exists() for f in self.jobs.get_job(item.job_id).result))
         self.assertFalse(song.with_suffix(".lrc").exists())
 
+    def test_alongside_readonly_filesystem_fails_item_and_batch_ends(self):
+        # On a read-only mount even creating (and cleaning up) the temp file fails;
+        # the cleanup error must not escape and kill the runner.
+        (song,) = self.songs("01.flac")
+        erofs = OSError(30, "Read-only file system")
+        with patch.object(config, "BATCH_OUTPUT", "alongside"), \
+                patch.object(bm.shutil, "copyfile", side_effect=erofs), \
+                patch.object(bm.Path, "unlink", side_effect=erofs):
+            batch = self.wait_ended(self.start([song]).id)
+        self.assertEqual(batch.items[0].status, ItemStatus.failed)
+        self.assertIn("could not write next to source", batch.items[0].error)
+
+    def test_unexpected_error_after_song_fails_item_not_runner(self):
+        first, second = self.songs("01.flac", "02.flac")
+        with patch.object(config, "BATCH_OUTPUT", "alongside"), \
+                patch.object(bm, "write_alongside", side_effect=[RuntimeError("bug"), ([], False)]):
+            batch = self.wait_ended(self.start([first, second]).id)
+        self.assertEqual(self.statuses(batch), [ItemStatus.failed, ItemStatus.completed])
+        self.assertIn("bug", batch.items[0].error)
+        self.assertEqual(batch.status, BatchStatus.completed)
+
     def test_download_mode_never_writes_next_to_source(self):
         (song,) = self.songs("01.flac")
         self.wait_ended(self.start([song]).id)

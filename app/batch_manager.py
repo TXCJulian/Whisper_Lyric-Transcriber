@@ -6,6 +6,7 @@ thread per batch processes the songs in order; every song still goes through
 JobManager's GPU semaphore, so batch songs and single requests never run on
 the GPU at the same time.
 """
+import contextlib
 import io
 import logging
 import os
@@ -94,7 +95,10 @@ def write_alongside(
             shutil.copyfile(output, tmp)
             os.replace(tmp, target)
         except OSError as e:
-            tmp.unlink(missing_ok=True)
+            # On a read-only mount the cleanup fails too; never let it mask
+            # the real error.
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
             raise AlongsideWriteError(f"could not write next to source: {e}") from e
         written.append(str(target))
     return written, bool(output_files) and existed == len(output_files)
@@ -252,32 +256,42 @@ class BatchManager:
     def _run(self, batch: Batch) -> None:
         options = dict(batch.options)
         skip_existing = options.pop("skip_existing", True)
-        while (item := self._next_item(batch)) is not None:
-            job = self.job_manager.create_job(batch_id=batch.id)
-            with self._lock:
-                item.job_id = job.id
-            self.job_manager.run(
-                job,
-                self.pipeline_fn,
-                input_path=item.path,
-                output_dir=job.output_dir,
-                **options,
-            )
-            status, error, written = ItemStatus.completed, None, []
-            if job.status != JobStatus.completed:
-                status, error = ItemStatus.failed, job.error
-            elif batch.output_mode == "alongside" and job.result:
+        try:
+            while (item := self._next_item(batch)) is not None:
                 try:
-                    written, all_existed = write_alongside(
-                        job.result, Path(item.path), skip_existing
-                    )
-                    if all_existed:
-                        status = ItemStatus.skipped
-                except AlongsideWriteError as e:
-                    status, error = ItemStatus.failed, str(e)
-            with self._lock:
-                item.status, item.error, item.written_alongside = status, error, written
+                    status, error, written = self._process(batch, item, options, skip_existing)
+                except Exception as e:  # never let one song stop the batch
+                    logger.exception(f"Batch {batch.id}: song {item.path} failed unexpectedly")
+                    status, error, written = ItemStatus.failed, f"unexpected error: {e}", []
+                with self._lock:
+                    item.status, item.error, item.written_alongside = status, error, written
+        finally:
+            self._finish(batch)
 
+    def _process(
+        self, batch: Batch, item: BatchItem, options: dict, skip_existing: bool
+    ) -> tuple[ItemStatus, str | None, list[str]]:
+        job = self.job_manager.create_job(batch_id=batch.id)
+        with self._lock:
+            item.job_id = job.id
+        self.job_manager.run(
+            job,
+            self.pipeline_fn,
+            input_path=item.path,
+            output_dir=job.output_dir,
+            **options,
+        )
+        if job.status != JobStatus.completed:
+            return ItemStatus.failed, job.error, []
+        if batch.output_mode != "alongside" or not job.result:
+            return ItemStatus.completed, None, []
+        try:
+            written, all_existed = write_alongside(job.result, Path(item.path), skip_existing)
+        except AlongsideWriteError as e:
+            return ItemStatus.failed, str(e), []
+        return (ItemStatus.skipped if all_existed else ItemStatus.completed), None, written
+
+    def _finish(self, batch: Batch) -> None:
         with self._lock:
             for item in batch.items:
                 if item.status == ItemStatus.pending:

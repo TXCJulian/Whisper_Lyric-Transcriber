@@ -206,7 +206,7 @@ Transcribe a whole album — or any list of songs — as **one batch** that runs
 2. Set `TRANSCRIBER_ALLOWED_ROOTS=/music`. Batch requests may only read inside these directories (comma-separated); every path is fully resolved (`..`, symlinks) before the check. Without this variable the batch endpoints answer `403 batch_disabled`.
 3. Choose where results go with `TRANSCRIBER_BATCH_OUTPUT`:
    - `download` (default) — results stay in the transcriber and are downloaded per song or as one ZIP. A read-only mount is enough.
-   - `alongside` — additionally write `<song>.lrc` / `<song>.txt` next to each song. Needs a writable mount. Existing lyrics files are never overwritten while `skip_existing` is on (the default); such songs are reported as `skipped`.
+   - `alongside` — additionally write `<song>.lrc` / `<song>.txt` next to each song. Needs a writable mount, and `PUID`/`PGID` must be allowed to write there (the container runs as that user, not root); otherwise those songs fail with `could not write next to source` while their results stay downloadable. Existing lyrics files are never overwritten while `skip_existing` is on (the default); such songs are reported as `skipped`.
 
 ### Starting a batch
 
