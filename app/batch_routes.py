@@ -5,6 +5,7 @@ from collections import Counter
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
 
+from app import api_docs as docs
 from app.batch_input import BatchInputError, collect_batch_paths
 from app.batch_manager import Batch, BatchFinished, BatchManager
 from app.models import (
@@ -18,7 +19,6 @@ from app.models import (
     OutputFormat,
 )
 from app.paths import PathError
-from app.separation import DEFAULT_DEMUCS_MODEL
 
 router = APIRouter(tags=["Batch"])
 
@@ -72,19 +72,47 @@ def _status(batch: Batch) -> BatchStatusResponse:
     )
 
 
-@router.post("/batch", response_model=BatchCreatedResponse, status_code=202)
+@router.post(
+    "/batch",
+    response_model=BatchCreatedResponse,
+    status_code=202,
+    summary="Start a batch",
+    description=(
+        "Transcribes every song of a folder, or every file listed in a CSV, as one batch. Songs "
+        "are read from storage mounted into the container and must lie inside "
+        "`TRANSCRIBER_ALLOWED_ROOTS`. Songs run one after another; options apply to every song, "
+        "artist/title for Genius come from each file's tags. Poll `GET /batches/{batch_id}`."
+    ),
+    responses={**docs.RESP_BATCH_PATH_ERRORS},
+)
 async def create_batch(
-    directory: str | None = Form(None),
-    csv: UploadFile | None = File(None),
-    recursive: bool = Form(False),
-    format: OutputFormat = Form(OutputFormat.lrc),
-    no_separation: bool = Form(False),
-    demucs_model: str = Form(DEFAULT_DEMUCS_MODEL),
-    whisper_model: str = Form("large-v3-turbo"),
-    language: str | None = Form(None),
-    no_correction: bool = Form(False),
-    correction_min_match: float | None = Form(None, ge=0, le=100),
-    skip_existing: bool = Form(True),
+    directory: str | None = Form(
+        None,
+        description="Folder whose audio files form the batch (e.g. `/music/Artist/Album`). Exactly one of `directory` or `csv`.",
+    ),
+    csv: UploadFile | None = File(
+        None,
+        description=(
+            "CSV with one absolute file path per row (first column; an optional `path` header, blank "
+            "lines and `#` comments are ignored; quote paths that contain commas). Exactly one of "
+            "`directory` or `csv`. Any invalid line rejects the whole request."
+        ),
+    ),
+    recursive: bool = Form(False, description="With `directory`: include audio files in subfolders."),
+    format: OutputFormat = docs.format_field(),
+    no_separation: bool = docs.no_separation_field(),
+    demucs_model: str = docs.demucs_model_field(),
+    whisper_model: str = docs.whisper_model_field(),
+    language: str | None = docs.language_field(),
+    no_correction: bool = docs.no_correction_field(),
+    correction_min_match: float | None = docs.correction_min_match_field(),
+    skip_existing: bool = Form(
+        True,
+        description=(
+            "`alongside` mode only: songs whose lyrics files already exist next to them are marked "
+            "`skipped` and never overwritten (checked at start and again before writing)."
+        ),
+    ),
 ):
     csv_content = await csv.read() if csv is not None else None
     try:
@@ -111,17 +139,37 @@ async def create_batch(
     return BatchCreatedResponse(batch_id=batch.id, total=len(batch.items))
 
 
-@router.get("/batches", response_model=list[BatchSummary])
+@router.get(
+    "/batches",
+    response_model=list[BatchSummary],
+    summary="List batches",
+    description="All batches still held by the service, newest first, with per-status song counts.",
+)
 def list_batches():
     return [_summary(batch) for batch in batch_manager.list_batches()]
 
 
-@router.get("/batches/{batch_id}", response_model=BatchStatusResponse)
+@router.get(
+    "/batches/{batch_id}",
+    response_model=BatchStatusResponse,
+    summary="Batch status",
+    description=(
+        "Overall status and per-song status, progress, warnings and result files. The batch is "
+        "`completed` when all songs are done (individual songs may have failed), `failed` only if "
+        "every song failed, `cancelled` after a cancel."
+    ),
+    responses={**docs.RESP_404_BATCH},
+)
 def get_batch(batch_id: str):
     return _status(_get_batch(batch_id))
 
 
-@router.get("/batches/{batch_id}/result")
+@router.get(
+    "/batches/{batch_id}/result",
+    summary="Download batch results",
+    description="Every finished song's result files as one ZIP. Works while the batch is still running.",
+    responses={**docs.RESP_BATCH_ZIP, **docs.RESP_404_BATCH},
+)
 def get_batch_result(batch_id: str):
     _get_batch(batch_id)
     content = batch_manager.zip_results(batch_id)
@@ -134,7 +182,16 @@ def get_batch_result(batch_id: str):
     )
 
 
-@router.post("/batches/{batch_id}/cancel", response_model=BatchStatusResponse)
+@router.post(
+    "/batches/{batch_id}/cancel",
+    response_model=BatchStatusResponse,
+    summary="Cancel a batch",
+    description=(
+        "Stops the batch but keeps it: waiting songs are cancelled, a song that is already running "
+        "finishes. Finished songs' results stay downloadable until the batch expires."
+    ),
+    responses={**docs.RESP_404_BATCH, 409: {"model": docs.ErrorResponse, "description": "`batch_finished`: the batch has already ended."}},
+)
 def cancel_batch(batch_id: str):
     batch = _get_batch(batch_id)
     try:
@@ -144,7 +201,20 @@ def cancel_batch(batch_id: str):
     return _status(batch)
 
 
-@router.delete("/batches/{batch_id}", response_model=BatchDeleteResponse)
+@router.delete(
+    "/batches/{batch_id}",
+    response_model=BatchDeleteResponse,
+    summary="Delete a batch",
+    description=(
+        "Cancels the batch and removes it with all its results. Files already written next to "
+        "songs (`alongside` mode) are kept."
+    ),
+    responses={
+        200: {"description": "Deleted."},
+        202: {"model": BatchDeleteResponse, "description": "A song is still running; the batch is deleted when it finishes (`status: cancelling`)."},
+        **docs.RESP_404_BATCH,
+    },
+)
 def delete_batch(batch_id: str, response: Response):
     _get_batch(batch_id)
     status = batch_manager.delete(batch_id)
