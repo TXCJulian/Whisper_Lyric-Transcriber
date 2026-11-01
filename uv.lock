@@ -749,6 +749,7 @@ dependencies = [
     { name = "demucs" },
     { name = "fastapi", extra = ["standard"] },
     { name = "faster-whisper" },
+    { name = "julius" },
     { name = "lyricsgenius" },
     { name = "mutagen" },
     { name = "python-dotenv" },
@@ -761,28 +762,23 @@ dependencies = [
 amd = [
     { name = "openai-whisper" },
     { name = "torch", version = "2.14.1+rocm7.2", source = { registry = "https://download.pytorch.org/whl/rocm7.2" } },
-    { name = "torchaudio", version = "2.11.0+rocm7.2", source = { registry = "https://download.pytorch.org/whl/rocm7.2" } },
     { name = "triton-rocm" },
 ]
 cpu = [
     { name = "torch", version = "2.14.1+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" } },
-    { name = "torchaudio", version = "2.11.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" } },
 ]
 intel = [
     { name = "openai-whisper" },
     { name = "torch", version = "2.14.1+xpu", source = { registry = "https://download.pytorch.org/whl/xpu" } },
-    { name = "torchaudio", version = "2.11.0+xpu", source = { registry = "https://download.pytorch.org/whl/xpu" } },
     { name = "triton-xpu" },
 ]
 nvidia = [
     { name = "nvidia-cublas-cu12", version = "12.9.2.10", source = { registry = "https://pypi.org/simple" } },
     { name = "torch", version = "2.14.1+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" } },
-    { name = "torchaudio", version = "2.11.0+cu130", source = { registry = "https://download.pytorch.org/whl/cu130" } },
 ]
 nvidia-legacy = [
     { name = "openai-whisper" },
     { name = "torch", version = "2.14.1+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" } },
-    { name = "torchaudio", version = "2.11.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" } },
 ]
 
 [package.metadata]
@@ -791,6 +787,7 @@ requires-dist = [
     { name = "demucs", specifier = ">=4.1.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.161.0" },
     { name = "faster-whisper", specifier = "==1.2.1" },
+    { name = "julius", specifier = ">=0.2.7" },
     { name = "lyricsgenius", specifier = ">=3.15.0" },
     { name = "mutagen", specifier = ">=1.48.1" },
     { name = "nvidia-cublas-cu12", marker = "extra == 'nvidia'", specifier = ">=12.9" },
@@ -805,11 +802,6 @@ requires-dist = [
     { name = "torch", marker = "extra == 'intel'", specifier = "==2.14.1", index = "https://download.pytorch.org/whl/xpu", conflict = { package = "lyric-transcriber", extra = "intel" } },
     { name = "torch", marker = "extra == 'nvidia'", specifier = "==2.14.1", index = "https://download.pytorch.org/whl/cu130", conflict = { package = "lyric-transcriber", extra = "nvidia" } },
     { name = "torch", marker = "extra == 'nvidia-legacy'", specifier = "==2.14.1", index = "https://download.pytorch.org/whl/cu126", conflict = { package = "lyric-transcriber", extra = "nvidia-legacy" } },
-    { name = "torchaudio", marker = "extra == 'amd'", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/rocm7.2", conflict = { package = "lyric-transcriber", extra = "amd" } },
-    { name = "torchaudio", marker = "extra == 'cpu'", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "lyric-transcriber", extra = "cpu" } },
-    { name = "torchaudio", marker = "extra == 'intel'", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/xpu", conflict = { package = "lyric-transcriber", extra = "intel" } },
-    { name = "torchaudio", marker = "extra == 'nvidia'", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/cu130", conflict = { package = "lyric-transcriber", extra = "nvidia" } },
-    { name = "torchaudio", marker = "extra == 'nvidia-legacy'", specifier = "==2.11.0", index = "https://download.pytorch.org/whl/cu126", conflict = { package = "lyric-transcriber", extra = "nvidia-legacy" } },
     { name = "triton-rocm", marker = "extra == 'amd'", index = "https://download.pytorch.org/whl/rocm7.2", conflict = { package = "lyric-transcriber", extra = "amd" } },
     { name = "triton-xpu", marker = "extra == 'intel'", index = "https://download.pytorch.org/whl/xpu", conflict = { package = "lyric-transcriber", extra = "intel" } },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.54.0" },
@@ -2008,66 +2000,6 @@ dependencies = [
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/xpu/torch-2.14.1%2Bxpu-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:4e0814459b341bca05bf688832a23c8f89d14b2f91a0e037f6f52207e29bcb8b", upload-time = "2026-09-30T22:04:22Z" },
     { url = "https://download-r2.pytorch.org/whl/xpu/torch-2.14.1%2Bxpu-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:edb132ae8b61bb115d508e7fcb92f3cc0b41754fc72b7922762d271b56ceb78b", upload-time = "2026-09-30T22:05:50Z" },
-]
-
-[[package]]
-name = "torchaudio"
-version = "2.11.0+cpu"
-source = { registry = "https://download.pytorch.org/whl/cpu" }
-resolution-markers = [
-    "platform_machine == 'x86_64' and sys_platform == 'linux'",
-]
-wheels = [
-    { url = "https://download-r2.pytorch.org/whl/cpu/torchaudio-2.11.0%2Bcpu-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:34c5dcd704e17a2b01c097b4fe3b5f83c5cdbc42b9f2abd095e026c588f873d4", upload-time = "2026-03-23T15:50:10Z" },
-    { url = "https://download-r2.pytorch.org/whl/cpu/torchaudio-2.11.0%2Bcpu-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:69db7c3d86af1bc8224f7053395ace3e2bd8c56b0c3922bc7b798114440c88e5", upload-time = "2026-03-23T15:50:10Z" },
-]
-
-[[package]]
-name = "torchaudio"
-version = "2.11.0+cu126"
-source = { registry = "https://download.pytorch.org/whl/cu126" }
-resolution-markers = [
-    "platform_machine == 'x86_64' and sys_platform == 'linux'",
-]
-wheels = [
-    { url = "https://download-r2.pytorch.org/whl/cu126/torchaudio-2.11.0%2Bcu126-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:08800408b1ab0a1992aea704b788103285703d009e232228886f9efa3cbc6a1b", upload-time = "2026-03-23T15:50:21Z" },
-    { url = "https://download-r2.pytorch.org/whl/cu126/torchaudio-2.11.0%2Bcu126-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:7fb725b644927fff30b0b23cbd2de155016b759382efd7b02a33ec77372072f5", upload-time = "2026-03-23T15:50:21Z" },
-]
-
-[[package]]
-name = "torchaudio"
-version = "2.11.0+cu130"
-source = { registry = "https://download.pytorch.org/whl/cu130" }
-resolution-markers = [
-    "platform_machine == 'x86_64' and sys_platform == 'linux'",
-]
-wheels = [
-    { url = "https://download-r2.pytorch.org/whl/cu130/torchaudio-2.11.0%2Bcu130-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:378b49671b581114a2d25d40928f12a150872feadf11669a63f573e81c78019a", upload-time = "2026-03-23T15:50:26Z" },
-    { url = "https://download-r2.pytorch.org/whl/cu130/torchaudio-2.11.0%2Bcu130-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:1cef8561494c44b12eb6a390d9f2ff52f6fa540b9a7aba6c8951c074056a2f11", upload-time = "2026-03-23T15:50:26Z" },
-]
-
-[[package]]
-name = "torchaudio"
-version = "2.11.0+rocm7.2"
-source = { registry = "https://download.pytorch.org/whl/rocm7.2" }
-resolution-markers = [
-    "platform_machine == 'x86_64' and sys_platform == 'linux'",
-]
-wheels = [
-    { url = "https://download-r2.pytorch.org/whl/rocm7.2/torchaudio-2.11.0%2Brocm7.2-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:239f01c838d6724ef2a8e7d8192caf6f7c1676efe8f41b07b2ae1f082e3d2712", upload-time = "2026-03-23T15:50:39Z" },
-    { url = "https://download-r2.pytorch.org/whl/rocm7.2/torchaudio-2.11.0%2Brocm7.2-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:d536cd12c7653fdfbc17e4bc87d1558450f14a145715de0177dc6b6af3eb2927", upload-time = "2026-03-23T15:50:39Z" },
-]
-
-[[package]]
-name = "torchaudio"
-version = "2.11.0+xpu"
-source = { registry = "https://download.pytorch.org/whl/xpu" }
-resolution-markers = [
-    "platform_machine == 'x86_64' and sys_platform == 'linux'",
-]
-wheels = [
-    { url = "https://download-r2.pytorch.org/whl/xpu/torchaudio-2.11.0%2Bxpu-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:ee77609e5a0af61a504c852565383fa06c8e07b4abbf11ec2e259bb5ff5facd9", upload-time = "2026-03-23T15:50:42Z" },
-    { url = "https://download-r2.pytorch.org/whl/xpu/torchaudio-2.11.0%2Bxpu-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:9d7dfd25f669a07b1dd642fa398a3ccf3080014fcd22356d0618266ad0606bde", upload-time = "2026-03-23T15:50:42Z" },
 ]
 
 [[package]]

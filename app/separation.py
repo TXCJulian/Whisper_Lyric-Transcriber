@@ -2,8 +2,8 @@ import os
 import logging
 
 import numpy as np
+import julius
 import torch
-import torchaudio
 import soundfile as sf
 from demucs.pretrained import get_model
 from demucs.apply import apply_model
@@ -64,6 +64,17 @@ def unload_model():
         logger.info("Demucs model unloaded from GPU")
 
 
+def resample(waveform: torch.Tensor, sr: int, target_sr: int) -> torch.Tensor:
+    """Resample (channels, samples) audio to *target_sr*.
+
+    Uses julius (a Demucs dependency) rather than torchaudio, which stopped
+    publishing releases after 2.11.
+    """
+    if sr == target_sr:
+        return waveform
+    return julius.resample_frac(waveform, sr, target_sr)
+
+
 def separate_vocals(
     input_path: str, output_dir: str, model_name: str = DEFAULT_DEMUCS_MODEL
 ) -> str:
@@ -72,14 +83,13 @@ def separate_vocals(
     model, device, target_sr = load_model(model_name)
     assert target_sr is not None, "Model sample rate not initialized"
 
-    # Load with soundfile directly to avoid torchaudio's torchcodec dependency
+    # Load with soundfile directly (no torchaudio/torchcodec needed)
     data, sr = sf.read(input_path, dtype="float32")  # shape: (samples,) or (samples, channels)
     if data.ndim == 1:
         data = data[:, np.newaxis]  # mono -> (samples, 1)
     waveform = torch.from_numpy(data.T)  # -> (channels, samples)
 
-    if sr != target_sr:
-        waveform = torchaudio.functional.resample(waveform, sr, target_sr)
+    waveform = resample(waveform, sr, target_sr)
 
     # Ensure stereo
     if waveform.shape[0] == 1:

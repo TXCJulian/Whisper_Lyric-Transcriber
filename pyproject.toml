@@ -17,6 +17,9 @@ dependencies = [
     # which PyAV 19 removed -- every faster-whisper transcription fails with
     # a TypeError. Lift together with a faster-whisper release that drops it.
     "av>=18.1,<19",
+    # Resampling before vocal separation (app/separation.py); Demucs depends on
+    # it too.
+    "julius>=0.2.7",
     "lyricsgenius>=3.15.0",
     "mutagen>=1.48.1",
     "fastapi[standard]>=0.161.0",
@@ -26,27 +29,25 @@ dependencies = [
 ]
 
 # One extra per runtime environment; exactly one is installed per venv.
-# torchaudio stopped publishing releases past 2.11.0 on every index, so it
-# stays there while torch moves on.
 [project.optional-dependencies]
 # Turing (sm_75) and newer: cu130 torch + faster-whisper (CTranslate2).
 # CTranslate2's CUDA build loads libcublas.so.12, but cu130 torch only ships
 # CUDA 13 libraries, hence the CUDA 12 cuBLAS (put on LD_LIBRARY_PATH by
 # docker/select-profile.sh).
-nvidia = ["torch==2.14.1", "torchaudio==2.11.0", "nvidia-cublas-cu12>=12.9"]
+nvidia = ["torch==2.14.1", "nvidia-cublas-cu12>=12.9"]
 # Maxwell/Pascal/Volta (e.g. Quadro M4000/P2200). PyTorch keeps the cu126
 # wheel line as its designated "legacy" build that still ships sm_50+
 # kernels, which cu128/cu130 dropped -- see
 # https://github.com/pytorch/pytorch/issues/178665. CTranslate2's prebuilt
 # wheels separately lack kernels for these architectures, so this
 # environment transcribes with openai-whisper (plain PyTorch) instead.
-nvidia-legacy = ["torch==2.14.1", "torchaudio==2.11.0", "openai-whisper==20250625"]
+nvidia-legacy = ["torch==2.14.1", "openai-whisper==20250625"]
 # triton-xpu / triton-rocm are listed only so [tool.uv.sources] can route
 # them to the PyTorch index (uv requires a sourced package to be a direct
 # dependency of the extra); torch itself pins their version.
-intel = ["torch==2.14.1", "torchaudio==2.11.0", "openai-whisper==20250625", "triton-xpu"]
-amd = ["torch==2.14.1", "torchaudio==2.11.0", "openai-whisper==20250625", "triton-rocm"]
-cpu = ["torch==2.14.1", "torchaudio==2.11.0"]
+intel = ["torch==2.14.1", "openai-whisper==20250625", "triton-xpu"]
+amd = ["torch==2.14.1", "openai-whisper==20250625", "triton-rocm"]
+cpu = ["torch==2.14.1"]
 
 [tool.uv]
 # Images are built for linux/amd64 only; local development on other
@@ -64,13 +65,6 @@ conflicts = [
 
 [tool.uv.sources]
 torch = [
-    { index = "pytorch-cu130", extra = "nvidia" },
-    { index = "pytorch-cu126", extra = "nvidia-legacy" },
-    { index = "pytorch-xpu", extra = "intel" },
-    { index = "pytorch-rocm", extra = "amd" },
-    { index = "pytorch-cpu", extra = "cpu" },
-]
-torchaudio = [
     { index = "pytorch-cu130", extra = "nvidia" },
     { index = "pytorch-cu126", extra = "nvidia-legacy" },
     { index = "pytorch-xpu", extra = "intel" },
