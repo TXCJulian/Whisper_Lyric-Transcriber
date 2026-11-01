@@ -17,6 +17,9 @@ AUDIO_EXTENSIONS = frozenset(
 
 MAX_BATCH_SIZE = 5000
 
+# Upper bound for an uploaded batch CSV; 5000 paths need well under 2 MB.
+MAX_CSV_BYTES = 16 * 1024 * 1024
+
 
 def parse_roots(raw: str) -> list[Path]:
     """Parse TRANSCRIBER_ALLOWED_ROOTS: comma-separated directories, resolved, deduplicated."""

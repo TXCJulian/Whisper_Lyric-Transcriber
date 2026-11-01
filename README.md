@@ -251,7 +251,7 @@ Batch errors carry a machine-readable code: `{"detail": {"code": "...", "message
 | 409 | `batch_finished` | Cancel on a batch that has already ended |
 | 409 | `job_in_batch` | `DELETE /jobs/{id}` on a song of a batch |
 | 422 | `invalid_batch_request` | Neither or both of `directory`/`csv`, no audio files found, or more than 5000 songs |
-| 422 | `invalid_csv` | Invalid CSV lines, listed in `errors: [{line, path, reason}]` |
+| 422 | `invalid_csv` | Invalid CSV lines, listed in `errors: [{line, path, reason}]`, or a CSV larger than 16 MiB |
 
 ## Output Formats
 

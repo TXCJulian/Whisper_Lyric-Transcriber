@@ -93,6 +93,16 @@ class BatchApiTests(unittest.TestCase):
         self.assertEqual(detail["code"], "invalid_csv")
         self.assertEqual(detail["errors"][0]["line"], 2)
 
+    def test_oversized_csv_rejected_without_reading_it_all(self):
+        with patch.object(config, "MAX_CSV_BYTES", 64):
+            response = self.client.post(
+                "/batch", files={"csv": ("l.csv", b"x" * 1000, "text/csv")}
+            )
+        self.assertEqual(response.status_code, 422)
+        detail = response.json()["detail"]
+        self.assertEqual(detail["code"], "invalid_csv")
+        self.assertIn("64", detail["message"])
+
     def test_path_outside_root_403(self):
         response = self.client.post("/batch", data={"directory": "/etc"})
         self.assertEqual(response.status_code, 403)

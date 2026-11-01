@@ -6,6 +6,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
 
 from app import api_docs as docs
+from app import config
 from app.batch_input import BatchInputError, collect_batch_paths
 from app.batch_manager import Batch, BatchFinished, BatchManager
 from app.models import (
@@ -114,7 +115,14 @@ async def create_batch(
         ),
     ),
 ):
-    csv_content = await csv.read() if csv is not None else None
+    csv_content = None
+    if csv is not None:
+        # Read at most one byte past the limit instead of the whole upload.
+        csv_content = await csv.read(config.MAX_CSV_BYTES + 1)
+        if len(csv_content) > config.MAX_CSV_BYTES:
+            raise _error(
+                422, "invalid_csv", f"CSV is larger than {config.MAX_CSV_BYTES} bytes"
+            )
     try:
         # Listing a large NAS folder can take a while; keep it off the event loop
         # so /health and job polling stay responsive.

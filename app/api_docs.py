@@ -142,7 +142,7 @@ RESP_BATCH_PATH_ERRORS = {
     404: _error("`path_not_found`: the directory does not exist."),
     422: _error(
         "`invalid_batch_request` (neither or both of `directory`/`csv`, no audio files, more than 5000 songs), "
-        "`invalid_csv` (with `errors: [{line, path, reason}]`), or a form field out of range."
+        "`invalid_csv` (with `errors: [{line, path, reason}]`, or a CSV over 16 MiB), or a form field out of range."
     ),
 }
 
