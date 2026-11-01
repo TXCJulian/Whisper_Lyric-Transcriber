@@ -9,7 +9,13 @@ spec:
   # One job queue per pod and a single GPU / RWO cache: never run two at once.
   strategy:
     type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lyric-transcriber
   template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: lyric-transcriber
     spec:
       containers:
         - name: lyric-transcriber

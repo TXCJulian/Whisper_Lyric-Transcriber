@@ -3,6 +3,8 @@ kind: Service
 metadata:
   name: lyric-transcriber
 spec:
+  selector:
+    app.kubernetes.io/name: lyric-transcriber
   ports:
     - name: http
       port: 3334
