@@ -30,7 +30,8 @@ the background, one job at a time on the GPU.
 `POST /batch` transcribes many songs as **one batch** — a folder (e.g. an
 album) or a CSV listing file paths — reading them straight from storage
 mounted into the container. The batch keeps running on the server regardless
-of the client; poll `GET /batches/{batch_id}` for per-song progress.
+of the client; batches run one at a time in submission order. Poll
+`GET /batches/{batch_id}` for per-song progress.
 
 Batch mode is off until **`TRANSCRIBER_ALLOWED_ROOTS`** lists the mounted
 directories it may read from (comma-separated). Every path is fully resolved

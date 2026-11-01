@@ -224,7 +224,7 @@ EOF
 curl -s -F "csv=@songs.csv" http://localhost:3334/batch
 ```
 
-`POST /batch` accepts the same options as `/transcribe` (`format`, `no_separation`, `demucs_model`, `whisper_model`, `language`, `no_correction`, `correction_min_match`) plus `directory` **or** `csv`, `recursive` and `skip_existing`. Artist and title for Genius come from each file's tags. Songs run one after another, sharing the GPU queue with single jobs. A CSV with any invalid line is rejected as a whole, listing every bad line.
+`POST /batch` accepts the same options as `/transcribe` (`format`, `no_separation`, `demucs_model`, `whisper_model`, `language`, `no_correction`, `correction_min_match`) plus `directory` **or** `csv`, `recursive` and `skip_existing`. Artist and title for Genius come from each file's tags. Batches run one at a time in the order they were submitted (a waiting batch shows `pending`); songs inside a batch run one after another, sharing the GPU queue with single jobs. A CSV with any invalid line is rejected as a whole, listing every bad line.
 
 ### Following and collecting a batch
 

@@ -1,15 +1,17 @@
 """Batches: many songs processed as one unit.
 
 Each song is a regular job (owned by its batch, see JobManager.batch_id), so
-per-song status and results stay available through /jobs/{id}. One runner
-thread per batch processes the songs in order; every song still goes through
-JobManager's GPU semaphore, so batch songs and single requests never run on
-the GPU at the same time.
+per-song status and results stay available through /jobs/{id}. One shared
+runner thread works through the queued batches in order (an album finishes
+before the next starts), however many are submitted; every song still goes
+through JobManager's GPU semaphore, so batch songs and single requests never
+run on the GPU at the same time.
 """
 import contextlib
 import io
 import logging
 import os
+import queue
 import shutil
 import threading
 import uuid
@@ -120,6 +122,8 @@ class BatchManager:
         self.pipeline_fn = pipeline_fn
         self._batches: OrderedDict[str, Batch] = OrderedDict()
         self._lock = threading.RLock()
+        self._queue: queue.Queue[Batch] = queue.Queue()
+        self._runner: threading.Thread | None = None
 
     # ── Public API ──────────────────────────────────────────────────────
 
@@ -148,7 +152,13 @@ class BatchManager:
         with self._lock:
             self._batches[batch.id] = batch
         self.evict_old()
-        threading.Thread(target=self._run, args=(batch,), daemon=True).start()
+        self._queue.put(batch)
+        with self._lock:
+            if self._runner is None or not self._runner.is_alive():
+                self._runner = threading.Thread(
+                    target=self._run_queue, name="batch-runner", daemon=True
+                )
+                self._runner.start()
         return batch
 
     def get(self, batch_id: str) -> Batch | None:
@@ -267,6 +277,14 @@ class BatchManager:
                     batch.status = BatchStatus.processing
                     return item
             return None
+
+    def _run_queue(self) -> None:
+        while True:
+            batch = self._queue.get()
+            try:
+                self._run(batch)
+            except Exception:
+                logger.exception(f"Batch {batch.id}: runner error")
 
     def _run(self, batch: Batch) -> None:
         options = dict(batch.options)

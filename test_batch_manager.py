@@ -91,6 +91,33 @@ class BatchManagerTests(unittest.TestCase):
         self.assertEqual(batch.status, BatchStatus.completed)
         self.assertEqual(self.statuses(batch), [ItemStatus.completed] * 3)
 
+    def test_batches_share_one_runner_thread_in_order(self):
+        # Many queued batches must not mean one blocked thread each.
+        self.pipeline.release_first.clear()
+        before = threading.active_count()
+        batches = [self.start(self.songs(f"b{i}/01.flac", f"b{i}/02.flac")) for i in range(3)]
+        self.assertTrue(self.pipeline.first_started.wait(5))
+        self.assertLessEqual(threading.active_count() - before, 1)
+        self.pipeline.release_first.set()
+        for batch in batches:
+            self.wait_ended(batch.id)
+        self.assertEqual(
+            [Path(p).relative_to(self.music).as_posix() for p in self.pipeline.calls],
+            ["b0/01.flac", "b0/02.flac", "b1/01.flac", "b1/02.flac", "b2/01.flac", "b2/02.flac"],
+        )
+
+    def test_cancel_queued_batch_before_it_starts(self):
+        self.pipeline.release_first.clear()
+        first = self.start(self.songs("a/01.flac"))
+        self.assertTrue(self.pipeline.first_started.wait(5))
+        queued = self.start(self.songs("b/01.flac"))
+        self.manager.cancel(queued.id)
+        self.pipeline.release_first.set()
+        self.wait_ended(first.id)
+        queued = self.wait_ended(queued.id)
+        self.assertEqual(queued.status, BatchStatus.cancelled)
+        self.assertEqual(len(self.pipeline.calls), 1)
+
     def test_failed_item_does_not_stop_batch(self):
         batch = self.wait_ended(self.start(self.songs("01.flac", "02 FAIL.flac", "03.flac")).id)
         self.assertEqual(
