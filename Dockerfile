@@ -101,6 +101,17 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         UV_PROJECT_ENVIRONMENT=/opt/venv/nvidia-legacy \
         uv sync --frozen --no-install-project --no-dev --python ${PYTHON_VERSION} --extra nvidia-legacy; \
     fi
+# ...and the newest architecture the cu126 wheel ships kernels for: on a host
+# driver too old for cu130, a newer GPU (e.g. Blackwell) can't use the legacy
+# env either and select-profile.sh falls back to CPU.
+RUN if [ "$GPU_BACKEND" = "nvidia" ]; then \
+        /opt/venv/nvidia-legacy/bin/python -c "import re, torch; \
+archs = [int(a) for a in re.findall(r'sm_(\d+)', torch._C._cuda_getArchFlags())]; \
+m = max(archs); print(f'{m // 10}.{m % 10}')" > /opt/venv/nvidia-legacy.max-compute-cap \
+        || { echo "WARNING: could not read torch CUDA arch list, assuming 9.0" >&2; \
+             echo 9.0 > /opt/venv/nvidia-legacy.max-compute-cap; }; \
+        echo "nvidia-legacy max compute capability: $(cat /opt/venv/nvidia-legacy.max-compute-cap)"; \
+    fi
 
 # ── Runtime stage ──────────────────────────────────────────────────────────
 FROM base-${GPU_BACKEND} AS runtime

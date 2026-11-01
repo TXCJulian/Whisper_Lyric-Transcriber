@@ -44,6 +44,17 @@ class CorrectionThresholdTests(unittest.TestCase):
         self.assertEqual(words_of(result), ["hello", "world", "foo"])
         self.assertEqual(warnings, [])
 
+    def test_near_empty_transcription_does_not_match_full_lyrics(self):
+        # An instrumental where Whisper hallucinated two words that happen to
+        # occur in the lyrics: equal/(equal+replace) said 100 %.
+        lyrics = "\n".join(f"line {i} with some other words thank you" for i in range(20))
+        warnings: list[str] = []
+        result = correct_transcription(
+            make_segments("thank you"), lyrics, min_match=50, warning_callback=warnings.append,
+        )
+        self.assertEqual(words_of(result), ["thank", "you"])
+        self.assertEqual(len(warnings), 1)
+
     def test_pipeline_forwards_threshold(self):
         import app.pipeline as pipeline
 

@@ -125,6 +125,34 @@ class BatchInputTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "invalid_batch_request")
         self.assertLessEqual(len(calls), 4)  # the folder + at most 3 songs
 
+    def test_directory_bad_entries_reported_not_fatal_and_links_deduplicated(self):
+        album = self.root / "links"
+        album.mkdir()
+        song = album / "01.flac"
+        song.write_bytes(b"x")
+        (album / "02 same song.flac").symlink_to(song)
+        (album / "03 broken.flac").symlink_to(album / "gone.flac")
+        (album / "04 outside.flac").symlink_to(self.outside)
+        rejected: list[dict] = []
+        paths = list_directory_audio(str(album), recursive=False, roots=self.roots, rejected=rejected)
+        self.assertEqual(paths, [song])
+        self.assertEqual(
+            sorted(Path(r["path"]).name for r in rejected), ["03 broken.flac", "04 outside.flac"]
+        )
+        songs, collected = collect_batch_paths(str(album), None, recursive=False)
+        self.assertEqual((songs, len(collected)), ([song], 2))
+
+    def test_csv_over_limit_rejected_before_resolving_paths(self):
+        import app.batch_input as batch_input
+
+        content = self.csv(*[str(self.album / f"{i:02d}.flac") for i in range(10)])
+        with patch.object(config, "MAX_BATCH_SIZE", 2), \
+                patch.object(batch_input, "resolve_allowed_path", side_effect=lambda p, roots=None: Path(p)) as resolve, \
+                self.assertRaises(BatchInputError) as ctx:
+            parse_csv_paths(content, self.roots)
+        self.assertEqual(ctx.exception.code, "invalid_batch_request")
+        self.assertLessEqual(resolve.call_count, 2)
+
     def test_collect_enforces_max_size(self):
         with patch.object(config, "MAX_BATCH_SIZE", 2), self.assertRaises(BatchInputError) as ctx:
             collect_batch_paths(str(self.album), None, recursive=True)

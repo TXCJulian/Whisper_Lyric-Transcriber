@@ -224,7 +224,7 @@ EOF
 curl -s -F "csv=@songs.csv" http://localhost:3334/batch
 ```
 
-`POST /batch` accepts the same options as `/transcribe` (`format`, `no_separation`, `demucs_model`, `whisper_model`, `language`, `no_correction`, `correction_min_match`) plus `directory` **or** `csv`, `recursive` and `skip_existing`. Artist and title for Genius come from each file's tags. Batches run one at a time in the order they were submitted (a waiting batch shows `pending`); songs inside a batch run one after another, sharing the GPU queue with single jobs. A CSV with any invalid line is rejected as a whole, listing every bad line.
+`POST /batch` accepts the same options as `/transcribe` (`format`, `no_separation`, `demucs_model`, `whisper_model`, `language`, `no_correction`, `correction_min_match`) plus `directory` **or** `csv`, `recursive` and `skip_existing`. Artist and title for Genius come from each file's tags. Batches run one at a time in the order they were submitted (a waiting batch shows `pending`); songs inside a batch run one after another, sharing the GPU queue with single jobs. A CSV with any invalid line is rejected as a whole, listing every bad line. In a directory, a file that can't be used (a broken symlink, or one pointing outside the allowed roots) only fails that song; a symlink and its target count as one song. In `alongside` mode, songs that would write the same lyrics file (`song.flac` and `song.mp3` → `song.lrc`) are processed once; the others fail with `lyrics file name already taken`.
 
 ### Following and collecting a batch
 
@@ -390,7 +390,7 @@ The correction step uses `difflib.SequenceMatcher` to align words between the Wh
 
 Artist and title for the Genius lookup are read from audio metadata tags (via mutagen). Use the `artist` and `title` form fields to override if metadata is missing.
 
-**Correction threshold:** the match rate is the share of aligned words that Whisper and Genius agree on exactly. When Genius returns lyrics for a different version of the song — a dub in another language, a live version, a remix — the rate drops, and applying them would rewrite correct lines with the wrong text. Set `CORRECTION_MIN_MATCH` (or `correction_min_match` per request) to a percentage such as `30`: below it the Genius lyrics are discarded, the Whisper transcription is kept, and the job gets a warning like `Genius lyrics matched only 10.5 % (threshold 30 %): kept the Whisper transcription`. The default `0` always applies the correction.
+**Correction threshold:** the match rate is the share of words in both texts that Whisper and Genius agree on exactly (twice the matching words over the two texts' combined length), so a near-empty transcription — an instrumental, a hallucinated "thank you" — doesn't count as a match for a full set of lyrics. When Genius returns lyrics for a different version of the song — a dub in another language, a live version, a remix — the rate drops, and applying them would rewrite correct lines with the wrong text. Set `CORRECTION_MIN_MATCH` (or `correction_min_match` per request) to a percentage such as `30`: below it the Genius lyrics are discarded, the Whisper transcription is kept, and the job gets a warning like `Genius lyrics matched only 10.5 % (threshold 30 %): kept the Whisper transcription`. The default `0` always applies the correction.
 
 ## Tech Stack
 

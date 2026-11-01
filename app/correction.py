@@ -445,9 +445,11 @@ def correct_transcription(
                     gi,
                 ))
 
-    # Log correction quality metric
-    total_aligned = n_equal + n_replace
-    match_pct = (n_equal / total_aligned * 100) if total_aligned > 0 else 0.0
+    # Log correction quality metric: matched words over both texts' length.
+    # Counting inserts/deletes matters: a near-empty transcription (an
+    # instrumental, a hallucinated "thank you") would otherwise "match" any
+    # lyrics that contain its few words at 100 %.
+    match_pct = matcher.ratio() * 100
     logger.info(
         f"Correction quality: {match_pct:.1f}% exact match "
         f"(equal={n_equal}, replace={n_replace}, delete={n_delete}, insert={n_insert})"

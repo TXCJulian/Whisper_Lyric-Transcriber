@@ -85,15 +85,49 @@ def targets_exist(source: Path, format: str) -> bool:
     )
 
 
+def _lyrics_key(source: Path) -> tuple[str, str]:
+    """Songs with equal keys write the same lyrics files (song.flac and
+    song.mp3 -> song.lrc); casefolded for case-insensitive shares."""
+    return str(source.parent).casefold(), source.stem.casefold()
+
+
+def _place(tmp: Path, target: Path, overwrite: bool) -> bool:
+    """Move *tmp* to *target*. Without *overwrite* a file that exists by now is
+    never replaced (returns False): a hard link fails atomically on an existing
+    name; shares without hard links (many SMB mounts) get an exclusive create."""
+    if overwrite:
+        os.replace(tmp, target)
+        return True
+    try:
+        os.link(tmp, target)
+        return True
+    except FileExistsError:
+        return False
+    except OSError:
+        pass
+    try:
+        dst = open(target, "xb")
+    except FileExistsError:
+        return False
+    try:
+        with dst, open(tmp, "rb") as src:
+            shutil.copyfileobj(src, dst)
+    except OSError:
+        with contextlib.suppress(OSError):
+            target.unlink()  # our own partial file
+        raise
+    return True
+
+
 def write_alongside(
     output_files: list[str], source: Path, skip_existing: bool
 ) -> tuple[list[str], bool]:
     """Copy result files next to *source* as '<song stem>.<ext>'.
 
-    Existing files are left alone when *skip_existing* (checked right before
-    writing, so a file that appeared while the batch ran is never
-    overwritten). Each file is written to a temp file and renamed into place.
-    Returns (written paths, whether every target already existed).
+    Existing files are left alone when *skip_existing* -- including one that
+    appeared while the batch ran. Each file is written to a temp file and
+    moved into place. Returns (written paths, whether every target already
+    existed).
     """
     written: list[str] = []
     existed = 0
@@ -105,14 +139,18 @@ def write_alongside(
         tmp = target.parent / f".{target.name}.{uuid.uuid4().hex[:8]}.tmp"
         try:
             shutil.copyfile(output, tmp)
-            os.replace(tmp, target)
+            placed = _place(tmp, target, overwrite=not skip_existing)
         except OSError as e:
+            raise AlongsideWriteError(f"could not write next to source: {e}") from e
+        finally:
             # On a read-only mount the cleanup fails too; never let it mask
             # the real error.
             with contextlib.suppress(OSError):
                 tmp.unlink(missing_ok=True)
-            raise AlongsideWriteError(f"could not write next to source: {e}") from e
-        written.append(str(target))
+        if placed:
+            written.append(str(target))
+        else:
+            existed += 1
     return written, bool(output_files) and existed == len(output_files)
 
 
@@ -127,20 +165,33 @@ class BatchManager:
 
     # ── Public API ──────────────────────────────────────────────────────
 
-    def create_batch(self, paths: list[Path], options: dict) -> Batch:
-        """Create a batch for *paths* and start processing it in the background."""
+    def create_batch(
+        self, paths: list[Path], options: dict, rejected: list[dict] | None = None
+    ) -> Batch:
+        """Create a batch for *paths* and start processing it in the background.
+
+        *rejected* ({path, reason}, from the directory scan) become failed items.
+        Checks the disk (alongside mode) and deletes expired batches: call it
+        off the event loop.
+        """
         output_mode = config.BATCH_OUTPUT
         skip_existing = options.get("skip_existing", True)
         items = []
+        claimed: dict[tuple[str, str], str] = {}  # lyrics key -> song writing it
         for path in paths:
             item = BatchItem(path=str(path))
-            if (
-                output_mode == "alongside"
-                and skip_existing
-                and targets_exist(Path(path), options.get("format", "lrc"))
-            ):
-                item.status = ItemStatus.skipped
+            if output_mode == "alongside":
+                owner = claimed.setdefault(_lyrics_key(Path(path)), str(path))
+                if owner != str(path):
+                    item.status = ItemStatus.failed
+                    item.error = f"lyrics file name already taken by {owner}"
+                elif skip_existing and targets_exist(Path(path), options.get("format", "lrc")):
+                    item.status = ItemStatus.skipped
             items.append(item)
+        for entry in rejected or []:
+            items.append(BatchItem(
+                path=entry["path"], status=ItemStatus.failed, error=entry["reason"]
+            ))
 
         batch = Batch(
             id=uuid.uuid4().hex[:12],
@@ -191,8 +242,9 @@ class BatchManager:
                 self._request_cancel(batch)
             if any(i.status == ItemStatus.processing for i in batch.items):
                 return "cancelling"
-            self._purge(batch)
-            return "deleted"
+            job_ids = self._purge(batch)
+        self._delete_jobs(job_ids)
+        return "deleted"
 
     def zip_results(self, batch_id: str) -> bytes | None:
         """All finished result files as a ZIP ('<song>/<file>'), None if none yet."""
@@ -219,6 +271,7 @@ class BatchManager:
     def evict_old(self) -> None:
         """Remove ended batches (and their jobs) older than JOB_TTL_SECONDS."""
         now = datetime.now(timezone.utc)
+        job_ids: list[str] = []
         with self._lock:
             expired = [
                 b for b in self._batches.values()
@@ -227,8 +280,9 @@ class BatchManager:
                 > jm.JOB_TTL_SECONDS
             ]
             for batch in expired:
-                self._purge(batch)
+                job_ids += self._purge(batch)
                 logger.info(f"Evicted old batch {batch.id}")
+        self._delete_jobs(job_ids)
 
     # ── Internals ───────────────────────────────────────────────────────
 
@@ -260,12 +314,16 @@ class BatchManager:
         batch.completed_at = _now()
         logger.info(f"Batch {batch.id} {batch.status.value}")
 
-    def _purge(self, batch: Batch) -> None:
-        # Caller holds the lock.
-        for item in batch.items:
-            if item.job_id:
-                self.job_manager.delete_job(item.job_id, force=True)
+    def _purge(self, batch: Batch) -> list[str]:
+        # Caller holds the lock. Returns the batch's job ids for _delete_jobs,
+        # which removes their files once the lock is released: deleting a big
+        # batch's folders must not block every other batch call and the runner.
         self._batches.pop(batch.id, None)
+        return [item.job_id for item in batch.items if item.job_id]
+
+    def _delete_jobs(self, job_ids: list[str]) -> None:
+        for job_id in job_ids:
+            self.job_manager.delete_job(job_id, force=True)
 
     def _next_item(self, batch: Batch) -> BatchItem | None:
         with self._lock:
@@ -325,11 +383,13 @@ class BatchManager:
         return (ItemStatus.skipped if all_existed else ItemStatus.completed), None, written
 
     def _finish(self, batch: Batch) -> None:
+        job_ids: list[str] = []
         with self._lock:
             for item in batch.items:
                 if item.status == ItemStatus.pending:
                     item.status = ItemStatus.cancelled
             self._finalize(batch)
             if batch.delete_requested and batch.id in self._batches:
-                self._purge(batch)
+                job_ids = self._purge(batch)
+        self._delete_jobs(job_ids)
         self.evict_old()

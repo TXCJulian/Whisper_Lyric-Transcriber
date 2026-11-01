@@ -64,6 +64,8 @@ select_profile() {
         case "$_gpu" in *,*) _driver_major=${_gpu#*,}; _driver_major=${_driver_major%%.*} ;; esac
         _min=$(cat "$_root/nvidia.min-compute-cap" 2>/dev/null || true)
         _is_cap "$_min" || _min=7.5
+        _legacy_max=$(cat "$_root/nvidia-legacy.max-compute-cap" 2>/dev/null || true)
+        _is_cap "$_legacy_max" || _legacy_max=9.0
         if ! _is_cap "$_cap"; then
             RUNTIME_PROFILE=cpu
             _reason="no NVIDIA GPU visible"
@@ -72,8 +74,14 @@ select_profile() {
             _reason="compute capability $_cap < $_min"
         elif case "$_driver_major" in ''|*[!0-9]*) false ;; esac \
             && [ "$_driver_major" -lt "$_MIN_DRIVER_CUDA13" ]; then
-            RUNTIME_PROFILE=nvidia-legacy
-            _reason="driver $_driver_major < $_MIN_DRIVER_CUDA13 needed by CUDA 13; update the host driver for faster-whisper"
+            # The legacy env only helps if its wheel has kernels for this GPU.
+            if _cap_lt "$_legacy_max" "$_cap"; then
+                RUNTIME_PROFILE=cpu
+                _reason="driver $_driver_major < $_MIN_DRIVER_CUDA13 needed by CUDA 13, and the legacy env has no kernels for compute capability $_cap (max $_legacy_max); update the host driver to use the GPU"
+            else
+                RUNTIME_PROFILE=nvidia-legacy
+                _reason="driver $_driver_major < $_MIN_DRIVER_CUDA13 needed by CUDA 13; update the host driver for faster-whisper"
+            fi
         else
             RUNTIME_PROFILE=nvidia
             _reason="compute capability $_cap"

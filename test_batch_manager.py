@@ -1,4 +1,5 @@
 """Tests for app/batch_manager.py with a fake pipeline (no GPU, no models)."""
+import contextlib
 import io
 import tempfile
 import threading
@@ -190,6 +191,26 @@ class BatchManagerTests(unittest.TestCase):
         self.assertEqual(second.with_suffix(".lrc").read_text(encoding="utf-8"), "appeared")
         self.assertEqual(self.statuses(batch), [ItemStatus.completed, ItemStatus.skipped])
 
+    def test_alongside_same_stem_in_one_folder_processed_once(self):
+        # song.flac and song.MP3 both write song.lrc: never overwrite one with
+        # the other, and don't spend GPU time on a result that can't be kept.
+        first, second = self.songs("song.flac", "Song.MP3")
+        with patch.object(config, "BATCH_OUTPUT", "alongside"):
+            batch = self.wait_ended(self.start([first, second], skip_existing=False).id)
+        self.assertEqual(self.statuses(batch), [ItemStatus.completed, ItemStatus.failed])
+        self.assertIn("already taken by", batch.items[1].error)
+        self.assertEqual(self.pipeline.calls, [str(first)])
+
+    def test_rejected_entries_become_failed_items(self):
+        (song,) = self.songs("01.flac")
+        batch = self.manager.create_batch(
+            [song], {"format": "lrc"}, [{"path": "/music/broken.flac", "reason": "Path not found"}]
+        )
+        batch = self.wait_ended(batch.id)
+        self.assertEqual(self.statuses(batch), [ItemStatus.completed, ItemStatus.failed])
+        self.assertEqual(batch.items[1].error, "Path not found")
+        self.assertEqual(batch.status, BatchStatus.completed)
+
     def test_alongside_format_all_writes_only_missing(self):
         (song,) = self.songs("01.flac")
         song.with_suffix(".lrc").write_text("mine", encoding="utf-8")
@@ -202,7 +223,7 @@ class BatchManagerTests(unittest.TestCase):
     def test_alongside_readonly_target_fails_item(self):
         (song,) = self.songs("01.flac")
         with patch.object(config, "BATCH_OUTPUT", "alongside"), \
-                patch.object(bm.os, "replace", side_effect=PermissionError("read-only")):
+                patch.object(bm, "_place", side_effect=PermissionError("read-only")):
             batch = self.wait_ended(self.start([song]).id)
         item = batch.items[0]
         self.assertEqual(item.status, ItemStatus.failed)
@@ -221,6 +242,25 @@ class BatchManagerTests(unittest.TestCase):
             batch = self.wait_ended(self.start([song]).id)
         self.assertEqual(batch.items[0].status, ItemStatus.failed)
         self.assertIn("could not write next to source", batch.items[0].error)
+
+    def test_place_never_replaces_file_created_after_the_check(self):
+        # The race write_alongside's exists() check can't close.
+        tmp_dir = Path(tempfile.mkdtemp(dir=self.music))
+        src, target = tmp_dir / "new.tmp", tmp_dir / "song.lrc"
+        for link_error in (None, PermissionError("no hard links on this share")):
+            with self.subTest(link_error=link_error):
+                src.write_text("new", encoding="utf-8")
+                target.write_text("theirs", encoding="utf-8")
+                with patch.object(bm.os, "link", side_effect=link_error) if link_error \
+                        else contextlib.nullcontext():
+                    self.assertFalse(bm._place(src, target, overwrite=False))
+                self.assertEqual(target.read_text(encoding="utf-8"), "theirs")
+                target.unlink()
+                with patch.object(bm.os, "link", side_effect=link_error) if link_error \
+                        else contextlib.nullcontext():
+                    self.assertTrue(bm._place(src, target, overwrite=False))
+                self.assertEqual(target.read_text(encoding="utf-8"), "new")
+                target.unlink()
 
     def test_unexpected_error_after_song_fails_item_not_runner(self):
         first, second = self.songs("01.flac", "02.flac")

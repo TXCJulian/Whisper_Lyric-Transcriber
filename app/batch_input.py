@@ -2,7 +2,9 @@
 
 Every path is checked against TRANSCRIBER_ALLOWED_ROOTS (app/paths.py). A CSV
 with any bad line is rejected as a whole, listing every bad line, so a batch is
-never started on a partial list.
+never started on a partial list. In a directory, files nobody named explicitly
+(a broken symlink, one pointing outside the roots, one that vanished during
+the scan) are reported instead of failing the whole folder.
 """
 import csv
 import io
@@ -29,23 +31,37 @@ def _is_audio(path: Path) -> bool:
 
 
 def list_directory_audio(
-    directory: str, recursive: bool, roots: list[Path] | None = None
+    directory: str,
+    recursive: bool,
+    roots: list[Path] | None = None,
+    rejected: list[dict] | None = None,
 ) -> list[Path]:
-    """Audio files in *directory* (and subfolders if *recursive*), sorted by name."""
+    """Audio files in *directory* (and subfolders if *recursive*), sorted by name.
+
+    Entries that can't be used are appended to *rejected* as {path, reason}.
+    """
     folder = resolve_allowed_path(directory, roots)
     if not folder.is_dir():
         raise BatchInputError("invalid_batch_request", f"Not a directory: {directory}")
 
     candidates = folder.rglob("*") if recursive else folder.iterdir()
     songs: list[tuple[str, Path]] = []  # (sort key, resolved path)
+    seen: set[Path] = set()
     for entry in candidates:
         if not _is_audio(entry):
             continue
         # A symlinked file pointing outside the roots is rejected the same way
-        # as such a path in a CSV.
-        resolved = resolve_allowed_path(str(entry), roots)
-        if not resolved.is_file():
+        # as such a path in a CSV, but only skips that one file.
+        try:
+            resolved = resolve_allowed_path(str(entry), roots)
+        except PathError as e:
+            if rejected is not None:
+                rejected.append({"path": str(entry), "reason": e.message})
             continue
+        # A symlink and its target (or two links to one file) are one song.
+        if not resolved.is_file() or resolved in seen:
+            continue
+        seen.add(resolved)
         songs.append((entry.relative_to(folder).as_posix().casefold(), resolved))
         # Stop as soon as the limit is exceeded instead of walking a whole
         # library first.
@@ -75,8 +91,10 @@ def parse_csv_paths(content: bytes, roots: list[Path] | None = None) -> list[Pat
         )
 
     songs: list[Path] = []
+    seen: set[Path] = set()
     errors: list[dict] = []
     seen_content = False
+    rows = 0
     for line_no, row in enumerate(csv.reader(io.StringIO(text, newline="")), start=1):
         cells = [cell.strip() for cell in row]
         if not any(cells) or cells[0].startswith("#"):
@@ -85,6 +103,14 @@ def parse_csv_paths(content: bytes, roots: list[Path] | None = None) -> list[Pat
         seen_content = True
         if first_row and cells[0].casefold() == "path":
             continue
+        # Count rows before touching the disk, so an oversized CSV is rejected
+        # without resolving every path on a NAS first.
+        rows += 1
+        if rows > config.MAX_BATCH_SIZE:
+            raise BatchInputError(
+                "invalid_batch_request",
+                f"CSV lists more than {config.MAX_BATCH_SIZE} songs, the batch limit",
+            )
 
         raw = cells[0]
         if len([c for c in cells if c]) > 1:
@@ -105,7 +131,8 @@ def parse_csv_paths(content: bytes, roots: list[Path] | None = None) -> list[Pat
         if not resolved.is_file():
             errors.append({"line": line_no, "path": raw, "reason": "not a file"})
             continue
-        if resolved not in songs:
+        if resolved not in seen:
+            seen.add(resolved)
             songs.append(resolved)
 
     if errors:
@@ -119,14 +146,18 @@ def parse_csv_paths(content: bytes, roots: list[Path] | None = None) -> list[Pat
 
 def collect_batch_paths(
     directory: str | None, csv_content: bytes | None, recursive: bool
-) -> list[Path]:
-    """Song list for a batch request: exactly one of *directory* or *csv_content*."""
+) -> tuple[list[Path], list[dict]]:
+    """Song list for a batch request: exactly one of *directory* or *csv_content*.
+
+    Returns (songs, rejected directory entries as {path, reason}).
+    """
     if (directory is None) == (csv_content is None):
         raise BatchInputError(
             "invalid_batch_request", "Provide exactly one of 'directory' or 'csv'"
         )
+    rejected: list[dict] = []
     if directory is not None:
-        songs = list_directory_audio(directory, recursive)
+        songs = list_directory_audio(directory, recursive, rejected=rejected)
     else:
         songs = parse_csv_paths(csv_content)
     if len(songs) > config.MAX_BATCH_SIZE:
@@ -134,5 +165,5 @@ def collect_batch_paths(
             "invalid_batch_request",
             f"Batch has {len(songs)} songs; the limit is {config.MAX_BATCH_SIZE}",
         )
-    return songs
+    return songs, rejected
 

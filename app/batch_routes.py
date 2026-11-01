@@ -89,7 +89,11 @@ def _status(batch: Batch) -> BatchStatusResponse:
 async def create_batch(
     directory: str | None = Form(
         None,
-        description="Folder whose audio files form the batch (e.g. `/music/Artist/Album`). Exactly one of `directory` or `csv`.",
+        description=(
+            "Folder whose audio files form the batch (e.g. `/music/Artist/Album`). Exactly one of "
+            "`directory` or `csv`. A file that can't be used (broken symlink, link outside the "
+            "allowed roots) becomes a failed song instead of rejecting the folder."
+        ),
     ),
     csv: UploadFile | None = File(
         None,
@@ -126,7 +130,7 @@ async def create_batch(
     try:
         # Listing a large NAS folder can take a while; keep it off the event loop
         # so /health and job polling stay responsive.
-        paths = await run_in_threadpool(
+        paths, rejected = await run_in_threadpool(
             collect_batch_paths, directory or None, csv_content, recursive
         )
     except PathError as e:
@@ -134,7 +138,9 @@ async def create_batch(
     except BatchInputError as e:
         raise _error(e.status_code, e.code, e.message, errors=e.errors or None)
 
-    batch = batch_manager.create_batch(paths, {
+    # Checks existing lyrics files (alongside mode) and deletes expired
+    # batches' files: disk work too.
+    batch = await run_in_threadpool(batch_manager.create_batch, paths, {
         "format": format.value,
         "no_separation": no_separation,
         "demucs_model": demucs_model,
@@ -143,7 +149,7 @@ async def create_batch(
         "no_correction": no_correction,
         "correction_min_match": correction_min_match,
         "skip_existing": skip_existing,
-    })
+    }, rejected)
     return BatchCreatedResponse(batch_id=batch.id, total=len(batch.items))
 
 
