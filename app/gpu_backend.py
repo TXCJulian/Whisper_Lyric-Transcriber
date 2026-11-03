@@ -3,6 +3,8 @@ import logging
 
 import torch
 
+from app.runtime_profile import get_runtime_profile
+
 logger = logging.getLogger(__name__)
 
 _backend: str | None = None
@@ -151,33 +153,17 @@ def is_nvidia() -> bool:
     return get_backend() == "cuda"
 
 
-def _is_legacy_nvidia() -> bool:
-    """Check if this is the legacy NVIDIA build (Maxwell/Pascal/Volta).
-
-    Prefers GPU_BACKEND_BUILD, which the Docker image bakes in at build
-    time and never changes at runtime. GPU_BACKEND itself isn't safe for
-    this check: compose files also set it as a runtime override (e.g. to
-    force cpu), so a prebuilt nvidia image started with GPU_BACKEND=
-    nvidia-legacy would otherwise route to OpenAIWhisperEngine despite
-    never having installed openai-whisper, and a prebuilt nvidia-legacy
-    image reset to GPU_BACKEND=nvidia would route to FasterWhisperEngine
-    despite CTranslate2 lacking kernels for the GPU. GPU_BACKEND_BUILD is
-    absent outside Docker, so local (non-container) runs still key off
-    GPU_BACKEND directly.
-    """
-    value = os.getenv("GPU_BACKEND_BUILD") or os.getenv("GPU_BACKEND", "")
-    return value.lower().strip() == "nvidia-legacy"
-
-
 def use_faster_whisper() -> bool:
     """Check if faster-whisper should be used (CUDA or CPU).
 
     Excludes legacy NVIDIA GPUs (Maxwell/Pascal/Volta): CTranslate2's
     prebuilt wheels dropped those architectures' kernels in its CUDA 12
-    migration, so nvidia-legacy uses the OpenAI Whisper engine instead.
+    migration. The entrypoint detects such GPUs and starts the app in the
+    nvidia-legacy environment, which only has the OpenAI Whisper engine
+    installed -- see app/runtime_profile.py.
     """
     backend = get_backend()
-    if backend == "cuda" and _is_legacy_nvidia():
+    if backend == "cuda" and get_runtime_profile() == "nvidia-legacy":
         return False
     return backend in ("cuda", "cpu")
 

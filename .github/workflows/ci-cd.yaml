@@ -1,21 +1,98 @@
 name: CI/CD
 
+# Tags (per image variant B = nvidia | intel | amd | cpu):
+#   feature branches  beta-B
+#   master            latest-B, X.Y.Z-B, X.Y-B, X-B and the immutable X.Y.Z-N-B
+# X.Y.Z comes from pyproject.toml (bumped by hand); N counts master builds of
+# that version, so the weekly rebuild (fresh OS packages, same code) keeps the
+# version and only increments N.
+
 on:
   push:
     branches:
       - '**'
   workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * 1'  # Mondays 03:00 UTC, builds master
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Feature branches: newest push wins. master: never cancel -- GitHub applies
+  # cancel-in-progress from the *new* run, so a push would otherwise kill a
+  # running weekly rebuild (losing its OS refresh) or leave a half-pushed
+  # build number behind.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 env:
   IMAGE: ghcr.io/txcjulian/whisper-lyric-transcriber
 
 jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      # setup-uv publishes no moving major tag; Dependabot bumps the pin.
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.3.2
+
+      # The route/OpenAPI tests import FastAPI and the app, so the tests run in
+      # the small cpu environment (cpu torch, no GPU, no model downloads).
+      - name: Run unit tests
+        run: uv run --frozen --extra cpu python -m unittest discover -v
+
+  meta:
+    name: Compute version and build number
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      build: ${{ steps.build.outputs.build }}
+      is_release: ${{ steps.version.outputs.is_release }}
+      build_date: ${{ steps.version.outputs.build_date }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Read version
+        id: version
+        run: |
+          version=$(python3 -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])")
+          {
+            echo "version=$version"
+            echo "is_release=${{ github.ref == 'refs/heads/master' }}"
+            echo "build_date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Compute build number
+        id: build
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ steps.version.outputs.is_release }}" != "true" ]; then
+            echo "build=beta" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          command -v skopeo >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
+          # Fails on anything but "repository not found", so a registry
+          # hiccup can never restart the count and overwrite X.Y.Z-N tags.
+          tags=$(sh .github/scripts/registry-tags.sh "$IMAGE")
+          build=$(printf '%s\n' "$tags" | sh .github/scripts/next-build-number.sh "$VERSION")
+          echo "Version $VERSION, build $build"
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
   docker-publish:
-    name: Build and publish Docker images
+    name: Build and publish ${{ matrix.backend }}
+    # No image (beta or release) is pushed unless the unit tests pass.
+    needs: [test, meta]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -24,11 +101,20 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        backend: [nvidia, nvidia-legacy, intel, amd]
+        backend: [nvidia, intel, amd, cpu]
 
     steps:
+      # The nvidia image carries two full torch installs; the runner's default
+      # free space isn't enough to build it.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          docker image prune -af
+          df -h /
+
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -40,11 +126,65 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Compute tags
+        id: tags
+        env:
+          B: ${{ matrix.backend }}
+          VERSION: ${{ needs.meta.outputs.version }}
+          BUILD: ${{ needs.meta.outputs.build }}
+        run: |
+          if [ "${{ needs.meta.outputs.is_release }}" = "true" ]; then
+            minor=${VERSION%.*}
+            major=${VERSION%%.*}
+            tags="$IMAGE:latest-$B,$IMAGE:$VERSION-$B,$IMAGE:$minor-$B,$IMAGE:$major-$B,$IMAGE:$VERSION-$BUILD-$B"
+          else
+            tags="$IMAGE:beta-$B"
+          fi
+          echo "$tags" | tr ',' '\n'
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+
       - name: Build and push image
         uses: docker/build-push-action@v7
         with:
           context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
           build-args: |
             GPU_BACKEND=${{ matrix.backend }}
-          push: true
-          tags: ${{ env.IMAGE }}:${{ (github.ref_name == 'master' && 'latest' || 'beta') }}-${{ matrix.backend }}
+            APP_VERSION=${{ needs.meta.outputs.version }}
+            APP_BUILD=${{ needs.meta.outputs.build }}
+            APP_COMMIT=${{ github.sha }}
+            BUILD_DATE=${{ needs.meta.outputs.build_date }}
+          # Layer cache in the registry (the GitHub Actions cache's 10 GB cap
+          # is too small for these images). The weekly rebuild skips the cache
+          # entirely so updated OS packages actually land in the image.
+          pull: true
+          no-cache: ${{ github.event_name == 'schedule' }}
+          cache-from: ${{ github.event_name != 'schedule' && format('type=registry,ref={0}:buildcache-{1}', env.IMAGE, matrix.backend) || '' }}
+          cache-to: ${{ github.event_name != 'schedule' && format('type=registry,ref={0}:buildcache-{1},mode=max,image-manifest=true,oci-mediatypes=true', env.IMAGE, matrix.backend) || '' }}
+
+  git-tag:
+    name: Tag release
+    needs: [meta, docker-publish]
+    # Runs on every release build, not just N=1: if the first build of a
+    # version failed somewhere, a later one still creates the tag. An existing
+    # tag is never moved (checked below).
+    if: needs.meta.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Create tag
+        env:
+          TAG: v${{ needs.meta.outputs.version }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            echo "$TAG already exists, leaving it alone"
+            exit 0
+          fi
+          git tag "$TAG" "$GITHUB_SHA"
+          git push origin "$TAG"

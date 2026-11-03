@@ -1,0 +1,13 @@
+# NVIDIA GPU override -- reserves one GPU. Works for every NVIDIA generation:
+# the image picks the modern or legacy (Maxwell/Pascal/Volta) environment at
+# start. Requires the NVIDIA Container Toolkit on the host.
+# Usage: docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.nvidia.yml --env-file .env up -d --build
+services:
+  lyric-transcriber:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

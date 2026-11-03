@@ -1,0 +1,6 @@
+# Intel Arc GPU override — passes through the render device
+# Usage: GPU_BACKEND=intel docker compose -f deploy/compose/docker-compose.yml -f deploy/compose/docker-compose.intel.yml --env-file .env up -d --build
+services:
+  lyric-transcriber:
+    devices:
+      - /dev/dri:/dev/dri

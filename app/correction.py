@@ -3,7 +3,7 @@ import re
 import time
 import difflib
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 import lyricsgenius
 from mutagen._file import File as MutagenFile
@@ -336,7 +336,10 @@ def _interpolate_timing(
 
 
 def correct_transcription(
-    segments: list[Segment], genius_lyrics: str
+    segments: list[Segment],
+    genius_lyrics: str,
+    min_match: float = 0.0,
+    warning_callback: Callable[[str], None] | None = None,
 ) -> list[Segment]:
     """
     Correct transcription using Genius lyrics as reference.
@@ -348,6 +351,10 @@ def correct_transcription(
     - insert (Genius-only words): add with timing interpolated from neighboring ops
 
     Then re-segment based on Genius line break positions.
+
+    If the exact-match rate falls below *min_match* (percent), the Genius
+    lyrics are assumed to belong to a different version of the song (e.g. a
+    dub) and the original Whisper segments are returned unchanged.
     """
     # Flatten all whisper words with their timing
     whisper_words: list[WordTiming] = []
@@ -438,9 +445,11 @@ def correct_transcription(
                     gi,
                 ))
 
-    # Log correction quality metric
-    total_aligned = n_equal + n_replace
-    match_pct = (n_equal / total_aligned * 100) if total_aligned > 0 else 0.0
+    # Log correction quality metric: matched words over both texts' length.
+    # Counting inserts/deletes matters: a near-empty transcription (an
+    # instrumental, a hallucinated "thank you") would otherwise "match" any
+    # lyrics that contain its few words at 100 %.
+    match_pct = matcher.ratio() * 100
     logger.info(
         f"Correction quality: {match_pct:.1f}% exact match "
         f"(equal={n_equal}, replace={n_replace}, delete={n_delete}, insert={n_insert})"
@@ -449,6 +458,15 @@ def correct_transcription(
         logger.warning(
             f"Very low match rate ({match_pct:.1f}%) — Genius lyrics may not match this song"
         )
+    if match_pct < min_match:
+        message = (
+            f"Genius lyrics matched only {match_pct:.1f} % "
+            f"(threshold {min_match:g} %): kept the Whisper transcription"
+        )
+        logger.warning(message)
+        if warning_callback:
+            warning_callback(message)
+        return segments
 
     if not output_words:
         logger.warning("Correction produced no output, returning original segments")

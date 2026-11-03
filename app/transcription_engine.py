@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 import numpy as np
 
+from app.runtime_profile import whisper_fp16_allowed
 from app.transcription import Segment, WordTiming
 
 logger = logging.getLogger(__name__)
@@ -222,6 +223,7 @@ class OpenAIWhisperEngine(TranscriptionEngine):
             self.unload_model()
             logger.info(
                 f"[openai-whisper] Loading '{model_size}' on {self._device}"
+                f" ({'fp16' if whisper_fp16_allowed() else 'fp32'})"
             )
             self._model = whisper.load_model(model_size, device=self._device)
             self._model_size = model_size
@@ -275,6 +277,8 @@ class OpenAIWhisperEngine(TranscriptionEngine):
             # faster-whisper's default; openai-whisper's own default (None)
             # falls back to greedy decoding instead of beam search.
             "beam_size": 5,
+            # fp32 on legacy NVIDIA GPUs -- see whisper_fp16_allowed().
+            "fp16": whisper_fp16_allowed(),
         }
         if language:
             kwargs["language"] = language

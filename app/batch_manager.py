@@ -1,0 +1,395 @@
+"""Batches: many songs processed as one unit.
+
+Each song is a regular job (owned by its batch, see JobManager.batch_id), so
+per-song status and results stay available through /jobs/{id}. One shared
+runner thread works through the queued batches in order (an album finishes
+before the next starts), however many are submitted; every song still goes
+through JobManager's GPU semaphore, so batch songs and single requests never
+run on the GPU at the same time.
+"""
+import contextlib
+import io
+import logging
+import os
+import queue
+import shutil
+import threading
+import uuid
+import zipfile
+from collections import OrderedDict
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Callable
+
+from app import config
+from app import job_manager as jm
+from app.models import BatchStatus, ItemStatus, JobStatus
+from app.pipeline import run_full_pipeline
+
+logger = logging.getLogger(__name__)
+
+# Lyrics files each output format produces next to a song.
+FORMAT_EXTENSIONS = {"lrc": [".lrc"], "txt": [".txt"], "all": [".lrc", ".txt"]}
+
+
+class BatchFinished(Exception):
+    """Raised when cancelling a batch that has already ended."""
+
+
+class AlongsideWriteError(Exception):
+    """Writing a result file next to its source song failed."""
+
+
+@dataclass
+class BatchItem:
+    path: str
+    status: ItemStatus = ItemStatus.pending
+    job_id: str | None = None
+    error: str | None = None
+    written_alongside: list[str] = field(default_factory=list)
+
+
+@dataclass
+class Batch:
+    id: str
+    created_at: str
+    output_mode: str
+    options: dict
+    items: list[BatchItem]
+    status: BatchStatus = BatchStatus.pending
+    completed_at: str | None = None
+    cancel_requested: bool = False
+    delete_requested: bool = False
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _zip_safe_name(name: str) -> str:
+    """One safe ZIP path component: no separators (a backslash is one for
+    Windows extractors) and never '.'/'..' -- song names like '...flac' would
+    otherwise yield Zip Slip entries such as '../x.lrc'."""
+    name = name.replace("/", "_").replace("\\", "_").strip()
+    if not name.strip("."):
+        name = "_" + name
+    return name
+
+
+def targets_exist(source: Path, format: str) -> bool:
+    """Whether every lyrics file *format* produces already exists next to *source*."""
+    return all(
+        (source.parent / f"{source.stem}{ext}").exists()
+        for ext in FORMAT_EXTENSIONS.get(format, [f".{format}"])
+    )
+
+
+def _lyrics_key(source: Path) -> tuple[str, str]:
+    """Songs with equal keys write the same lyrics files (song.flac and
+    song.mp3 -> song.lrc); casefolded for case-insensitive shares."""
+    return str(source.parent).casefold(), source.stem.casefold()
+
+
+def _place(tmp: Path, target: Path, overwrite: bool) -> bool:
+    """Move *tmp* to *target*. Without *overwrite* a file that exists by now is
+    never replaced (returns False): a hard link fails atomically on an existing
+    name; shares without hard links (many SMB mounts) get an exclusive create."""
+    if overwrite:
+        os.replace(tmp, target)
+        return True
+    try:
+        os.link(tmp, target)
+        return True
+    except FileExistsError:
+        return False
+    except OSError:
+        pass
+    try:
+        dst = open(target, "xb")
+    except FileExistsError:
+        return False
+    try:
+        with dst, open(tmp, "rb") as src:
+            shutil.copyfileobj(src, dst)
+    except OSError:
+        with contextlib.suppress(OSError):
+            target.unlink()  # our own partial file
+        raise
+    return True
+
+
+def write_alongside(
+    output_files: list[str], source: Path, skip_existing: bool
+) -> tuple[list[str], bool]:
+    """Copy result files next to *source* as '<song stem>.<ext>'.
+
+    Existing files are left alone when *skip_existing* -- including one that
+    appeared while the batch ran. Each file is written to a temp file and
+    moved into place. Returns (written paths, whether every target already
+    existed).
+    """
+    written: list[str] = []
+    existed = 0
+    for output in output_files:
+        target = source.parent / f"{source.stem}{Path(output).suffix}"
+        if skip_existing and target.exists():
+            existed += 1
+            continue
+        tmp = target.parent / f".{target.name}.{uuid.uuid4().hex[:8]}.tmp"
+        try:
+            shutil.copyfile(output, tmp)
+            placed = _place(tmp, target, overwrite=not skip_existing)
+        except OSError as e:
+            raise AlongsideWriteError(f"could not write next to source: {e}") from e
+        finally:
+            # On a read-only mount the cleanup fails too; never let it mask
+            # the real error.
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
+        if placed:
+            written.append(str(target))
+        else:
+            existed += 1
+    return written, bool(output_files) and existed == len(output_files)
+
+
+class BatchManager:
+    def __init__(self, job_manager: jm.JobManager, pipeline_fn: Callable = run_full_pipeline):
+        self.job_manager = job_manager
+        self.pipeline_fn = pipeline_fn
+        self._batches: OrderedDict[str, Batch] = OrderedDict()
+        self._lock = threading.RLock()
+        self._queue: queue.Queue[Batch] = queue.Queue()
+        self._runner: threading.Thread | None = None
+
+    # ── Public API ──────────────────────────────────────────────────────
+
+    def create_batch(
+        self, paths: list[Path], options: dict, rejected: list[dict] | None = None
+    ) -> Batch:
+        """Create a batch for *paths* and start processing it in the background.
+
+        *rejected* ({path, reason}, from the directory scan) become failed items.
+        Checks the disk (alongside mode) and deletes expired batches: call it
+        off the event loop.
+        """
+        output_mode = config.BATCH_OUTPUT
+        skip_existing = options.get("skip_existing", True)
+        items = []
+        claimed: dict[tuple[str, str], str] = {}  # lyrics key -> song writing it
+        for path in paths:
+            item = BatchItem(path=str(path))
+            if output_mode == "alongside":
+                owner = claimed.setdefault(_lyrics_key(Path(path)), str(path))
+                if owner != str(path):
+                    item.status = ItemStatus.failed
+                    item.error = f"lyrics file name already taken by {owner}"
+                elif skip_existing and targets_exist(Path(path), options.get("format", "lrc")):
+                    item.status = ItemStatus.skipped
+            items.append(item)
+        for entry in rejected or []:
+            items.append(BatchItem(
+                path=entry["path"], status=ItemStatus.failed, error=entry["reason"]
+            ))
+
+        batch = Batch(
+            id=uuid.uuid4().hex[:12],
+            created_at=_now(),
+            output_mode=output_mode,
+            options=dict(options),
+            items=items,
+        )
+        with self._lock:
+            self._batches[batch.id] = batch
+        self.evict_old()
+        self._queue.put(batch)
+        with self._lock:
+            if self._runner is None or not self._runner.is_alive():
+                self._runner = threading.Thread(
+                    target=self._run_queue, name="batch-runner", daemon=True
+                )
+                self._runner.start()
+        return batch
+
+    def get(self, batch_id: str) -> Batch | None:
+        # Evict on reads too: otherwise a finished batch would only expire
+        # when another batch is created or finishes.
+        self.evict_old()
+        with self._lock:
+            return self._batches.get(batch_id)
+
+    def list_batches(self) -> list[Batch]:
+        self.evict_old()
+        with self._lock:
+            return list(reversed(self._batches.values()))
+
+    def cancel(self, batch_id: str) -> Batch:
+        """Stop a batch: pending songs are cancelled, a running song finishes."""
+        with self._lock:
+            batch = self._require(batch_id)
+            if batch.completed_at:
+                raise BatchFinished(batch_id)
+            self._request_cancel(batch)
+            return batch
+
+    def delete(self, batch_id: str) -> str:
+        """Cancel and remove a batch; 'cancelling' while a song still runs."""
+        with self._lock:
+            batch = self._require(batch_id)
+            batch.delete_requested = True
+            if not batch.completed_at:
+                self._request_cancel(batch)
+            if any(i.status == ItemStatus.processing for i in batch.items):
+                return "cancelling"
+            job_ids = self._purge(batch)
+        self._delete_jobs(job_ids)
+        return "deleted"
+
+    def zip_results(self, batch_id: str) -> bytes | None:
+        """All finished result files as a ZIP ('<song>/<file>'), None if none yet."""
+        with self._lock:
+            items = list(self._require(batch_id).items)
+        buffer = io.BytesIO()
+        folders: dict[str, int] = {}
+        count = 0
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            for item in items:
+                job = self.job_manager.get_job(item.job_id) if item.job_id else None
+                if not job or job.status != JobStatus.completed or not job.result:
+                    continue
+                stem = _zip_safe_name(Path(item.path).stem)
+                folders[stem] = folders.get(stem, 0) + 1
+                folder = stem if folders[stem] == 1 else f"{stem} ({folders[stem]})"
+                for file_path in job.result:
+                    if os.path.exists(file_path):
+                        name = _zip_safe_name(os.path.basename(file_path))
+                        zf.write(file_path, f"{folder}/{name}")
+                        count += 1
+        return buffer.getvalue() if count else None
+
+    def evict_old(self) -> None:
+        """Remove ended batches (and their jobs) older than JOB_TTL_SECONDS."""
+        now = datetime.now(timezone.utc)
+        job_ids: list[str] = []
+        with self._lock:
+            expired = [
+                b for b in self._batches.values()
+                if b.completed_at
+                and (now - datetime.fromisoformat(b.completed_at)).total_seconds()
+                > jm.JOB_TTL_SECONDS
+            ]
+            for batch in expired:
+                job_ids += self._purge(batch)
+                logger.info(f"Evicted old batch {batch.id}")
+        self._delete_jobs(job_ids)
+
+    # ── Internals ───────────────────────────────────────────────────────
+
+    def _require(self, batch_id: str) -> Batch:
+        batch = self._batches.get(batch_id)
+        if batch is None:
+            raise KeyError(batch_id)
+        return batch
+
+    def _request_cancel(self, batch: Batch) -> None:
+        # Caller holds the lock.
+        batch.cancel_requested = True
+        for item in batch.items:
+            if item.status == ItemStatus.pending:
+                item.status = ItemStatus.cancelled
+        if not any(i.status == ItemStatus.processing for i in batch.items):
+            self._finalize(batch)
+
+    def _finalize(self, batch: Batch) -> None:
+        # Caller holds the lock. Idempotent.
+        if batch.completed_at:
+            return
+        if batch.cancel_requested:
+            batch.status = BatchStatus.cancelled
+        elif batch.items and all(i.status == ItemStatus.failed for i in batch.items):
+            batch.status = BatchStatus.failed
+        else:
+            batch.status = BatchStatus.completed
+        batch.completed_at = _now()
+        logger.info(f"Batch {batch.id} {batch.status.value}")
+
+    def _purge(self, batch: Batch) -> list[str]:
+        # Caller holds the lock. Returns the batch's job ids for _delete_jobs,
+        # which removes their files once the lock is released: deleting a big
+        # batch's folders must not block every other batch call and the runner.
+        self._batches.pop(batch.id, None)
+        return [item.job_id for item in batch.items if item.job_id]
+
+    def _delete_jobs(self, job_ids: list[str]) -> None:
+        for job_id in job_ids:
+            self.job_manager.delete_job(job_id, force=True)
+
+    def _next_item(self, batch: Batch) -> BatchItem | None:
+        with self._lock:
+            if batch.cancel_requested:
+                return None
+            for item in batch.items:
+                if item.status == ItemStatus.pending:
+                    item.status = ItemStatus.processing
+                    batch.status = BatchStatus.processing
+                    return item
+            return None
+
+    def _run_queue(self) -> None:
+        while True:
+            batch = self._queue.get()
+            try:
+                self._run(batch)
+            except Exception:
+                logger.exception(f"Batch {batch.id}: runner error")
+
+    def _run(self, batch: Batch) -> None:
+        options = dict(batch.options)
+        skip_existing = options.pop("skip_existing", True)
+        try:
+            while (item := self._next_item(batch)) is not None:
+                try:
+                    status, error, written = self._process(batch, item, options, skip_existing)
+                except Exception as e:  # never let one song stop the batch
+                    logger.exception(f"Batch {batch.id}: song {item.path} failed unexpectedly")
+                    status, error, written = ItemStatus.failed, f"unexpected error: {e}", []
+                with self._lock:
+                    item.status, item.error, item.written_alongside = status, error, written
+        finally:
+            self._finish(batch)
+
+    def _process(
+        self, batch: Batch, item: BatchItem, options: dict, skip_existing: bool
+    ) -> tuple[ItemStatus, str | None, list[str]]:
+        job = self.job_manager.create_job(batch_id=batch.id)
+        with self._lock:
+            item.job_id = job.id
+        self.job_manager.run(
+            job,
+            self.pipeline_fn,
+            input_path=item.path,
+            output_dir=job.output_dir,
+            **options,
+        )
+        if job.status != JobStatus.completed:
+            return ItemStatus.failed, job.error, []
+        if batch.output_mode != "alongside" or not job.result:
+            return ItemStatus.completed, None, []
+        try:
+            written, all_existed = write_alongside(job.result, Path(item.path), skip_existing)
+        except AlongsideWriteError as e:
+            return ItemStatus.failed, str(e), []
+        return (ItemStatus.skipped if all_existed else ItemStatus.completed), None, written
+
+    def _finish(self, batch: Batch) -> None:
+        job_ids: list[str] = []
+        with self._lock:
+            for item in batch.items:
+                if item.status == ItemStatus.pending:
+                    item.status = ItemStatus.cancelled
+            self._finalize(batch)
+            if batch.delete_requested and batch.id in self._batches:
+                job_ids = self._purge(batch)
+        self._delete_jobs(job_ids)
+        self.evict_old()
