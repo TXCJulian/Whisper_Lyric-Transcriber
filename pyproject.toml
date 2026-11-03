@@ -16,7 +16,7 @@ dependencies = [
     # faster-whisper 1.2.1's decode_audio() passes av.open(metadata_errors=...),
     # which PyAV 19 removed -- every faster-whisper transcription fails with
     # a TypeError. Lift together with a faster-whisper release that drops it.
-    "av>=18.1,<19",
+    "av>=18.1,<20",
     # Resampling before vocal separation (app/separation.py); Demucs depends on
     # it too.
     "julius>=0.2.7",
