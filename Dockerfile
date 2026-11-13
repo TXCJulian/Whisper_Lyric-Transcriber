@@ -20,7 +20,7 @@ ARG PYTHON_VERSION=3.14
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
 # ── Base images per backend ────────────────────────────────────────────────
-FROM debian:trixie-20261020-slim AS base-nvidia
+FROM debian:trixie-20261104-slim AS base-nvidia
 # The nvidia/cuda base image used to set these; without them the NVIDIA
 # container runtime injects neither the driver's CUDA libraries nor
 # nvidia-smi, and every GPU node silently falls back to CPU.
@@ -32,8 +32,8 @@ ENV NVIDIA_VISIBLE_DEVICES=all \
 # smaller legacy-only image (cu126 env only, always the nvidia-legacy profile).
 FROM base-nvidia AS base-nvidia-legacy
 
-FROM debian:trixie-20261020-slim AS base-amd
-FROM debian:trixie-20261020-slim AS base-cpu
+FROM debian:trixie-20261104-slim AS base-amd
+FROM debian:trixie-20261104-slim AS base-cpu
 
 # Intel needs the user-space GPU driver (Level-Zero + compute-runtime) inside
 # the container. Debian's and Ubuntu 24.04's packaged versions are too old for
